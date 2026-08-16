@@ -4,6 +4,7 @@ import '../../domain/domain.dart';
 import '../tracking_message.dart';
 import '../tracking_source.dart';
 import 'match_simulation.dart';
+import 'simulation_options.dart';
 import 'simulated_squad.dart';
 
 /// A [TrackingSource] that fabricates a handball match.
@@ -36,6 +37,9 @@ class SimulatorTrackingSource implements TrackingSource {
   /// How often each side exchanges a field player with a substitute; zero
   /// keeps the starting line-up on for the whole connection.
   final Duration substitutionInterval;
+  final BenchSideline benchSideline;
+  final double crossesPerAttack;
+  final SubstitutionTiming substitutionTiming;
 
   /// Injectable wall clock, so tests can pin the recording's start instant.
   final DateTime Function() _clock;
@@ -58,10 +62,13 @@ class SimulatorTrackingSource implements TrackingSource {
     this.sampleRateHz = defaultSampleRateHz,
     this.seed = 20260816,
     this.substitutionInterval = MatchSimulation.defaultSubstitutionInterval,
+    this.benchSideline = BenchSideline.bottom,
+    this.crossesPerAttack = MatchSimulation.defaultCrossesPerAttack,
+    this.substitutionTiming = SubstitutionTiming.anyTime,
     DateTime Function()? clock,
-  })  : assert(sampleRateHz > 0, 'sampleRateHz must be positive'),
-        squad = squad ?? SimulatedSquad.handballTeams(),
-        _clock = clock ?? DateTime.now;
+  }) : assert(sampleRateHz > 0, 'sampleRateHz must be positive'),
+       squad = squad ?? SimulatedSquad.handballTeams(),
+       _clock = clock ?? DateTime.now;
 
   /// Nominal interval between frames, in microseconds.
   int get framePeriodMicros => 1000000 ~/ sampleRateHz;
@@ -92,6 +99,9 @@ class SimulatorTrackingSource implements TrackingSource {
       squad: squad,
       seed: seed,
       substitutionInterval: substitutionInterval,
+      benchSideline: benchSideline,
+      crossesPerAttack: crossesPerAttack,
+      substitutionTiming: substitutionTiming,
     );
     _startMicros = _clock().toUtc().microsecondsSinceEpoch;
     _timer = Timer.periodic(

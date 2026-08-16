@@ -1,6 +1,7 @@
 import 'package:meta/meta.dart';
 
 import '../../analytics/analytics_thresholds.dart';
+import '../../tracking/simulator/simulation_options.dart';
 import '../../tracking/simulator/simulated_squad.dart';
 
 /// User-adjustable knobs that are not part of a session's setup.
@@ -44,6 +45,19 @@ class AppSettings {
   /// open.
   final int substitutionIntervalSeconds;
 
+  /// Which long sideline holds both teams' benches.
+  final BenchSideline benchSideline;
+
+  /// Expected attacking-player crosses in each settled attack.
+  ///
+  /// This is a rate rather than a guaranteed count. At 0.5, deterministic
+  /// simulation randomness produces about one cross every two attacks.
+  final double crossesPerAttack;
+
+  /// Whether a due substitution starts immediately or waits for that side's
+  /// next settled attack.
+  final SubstitutionTiming substitutionTiming;
+
   /// Default mounting height applied to receivers in a generated layout.
   final double receiverMountHeightMeters;
 
@@ -57,6 +71,9 @@ class AppSettings {
     this.captureRateHz = 20,
     this.fieldPlayersOnCourt = SimulatedSquad.defaultFieldPlayersOnCourt,
     this.substitutionIntervalSeconds = defaultSubstitutionIntervalSeconds,
+    this.benchSideline = BenchSideline.bottom,
+    this.crossesPerAttack = defaultCrossesPerAttack,
+    this.substitutionTiming = SubstitutionTiming.anyTime,
     this.receiverMountHeightMeters = defaultMountHeightMeters,
     this.receiverMarginMeters = defaultReceiverMarginMeters,
     this.analytics = AnalyticsThresholds.defaults,
@@ -99,6 +116,9 @@ class AppSettings {
   /// The value that turns rotation off, kept at the bottom of the same scale
   /// so the UI needs one control rather than a switch and a slider.
   static const int substitutionOffSeconds = 0;
+  static const double defaultCrossesPerAttack = 0.5;
+  static const double minCrossesPerAttack = 0.0;
+  static const double maxCrossesPerAttack = 3.0;
   static const double minMountHeightMeters = 1.0;
   static const double maxMountHeightMeters = 12.0;
   static const double minReceiverMarginMeters = 0.0;
@@ -110,60 +130,83 @@ class AppSettings {
     int? captureRateHz,
     int? fieldPlayersOnCourt,
     int? substitutionIntervalSeconds,
+    BenchSideline? benchSideline,
+    double? crossesPerAttack,
+    SubstitutionTiming? substitutionTiming,
     double? receiverMountHeightMeters,
     double? receiverMarginMeters,
     AnalyticsThresholds? analytics,
-  }) =>
-      AppSettings(
-        captureRateHz: captureRateHz ?? this.captureRateHz,
-        fieldPlayersOnCourt: fieldPlayersOnCourt ?? this.fieldPlayersOnCourt,
-        substitutionIntervalSeconds:
-            substitutionIntervalSeconds ?? this.substitutionIntervalSeconds,
-        receiverMountHeightMeters:
-            receiverMountHeightMeters ?? this.receiverMountHeightMeters,
-        receiverMarginMeters:
-            receiverMarginMeters ?? this.receiverMarginMeters,
-        analytics: analytics ?? this.analytics,
-      );
+  }) => AppSettings(
+    captureRateHz: captureRateHz ?? this.captureRateHz,
+    fieldPlayersOnCourt: fieldPlayersOnCourt ?? this.fieldPlayersOnCourt,
+    substitutionIntervalSeconds:
+        substitutionIntervalSeconds ?? this.substitutionIntervalSeconds,
+    benchSideline: benchSideline ?? this.benchSideline,
+    crossesPerAttack: crossesPerAttack ?? this.crossesPerAttack,
+    substitutionTiming: substitutionTiming ?? this.substitutionTiming,
+    receiverMountHeightMeters:
+        receiverMountHeightMeters ?? this.receiverMountHeightMeters,
+    receiverMarginMeters: receiverMarginMeters ?? this.receiverMarginMeters,
+    analytics: analytics ?? this.analytics,
+  );
 
   Map<String, dynamic> toJson() => {
-        'captureRateHz': captureRateHz,
-        'fieldPlayersOnCourt': fieldPlayersOnCourt,
-        'substitutionIntervalSeconds': substitutionIntervalSeconds,
-        'receiverMountHeightMeters': receiverMountHeightMeters,
-        'receiverMarginMeters': receiverMarginMeters,
-        'maxPlausibleSpeedMps': analytics.maxPlausibleSpeedMps,
-        'speedWindowMillis': analytics.speedWindow.inMilliseconds,
-        'minConfidence': analytics.minConfidence,
-      };
+    'captureRateHz': captureRateHz,
+    'fieldPlayersOnCourt': fieldPlayersOnCourt,
+    'substitutionIntervalSeconds': substitutionIntervalSeconds,
+    'benchSideline': benchSideline.name,
+    'crossesPerAttack': crossesPerAttack,
+    'substitutionTiming': substitutionTiming.name,
+    'receiverMountHeightMeters': receiverMountHeightMeters,
+    'receiverMarginMeters': receiverMarginMeters,
+    'maxPlausibleSpeedMps': analytics.maxPlausibleSpeedMps,
+    'speedWindowMillis': analytics.speedWindow.inMilliseconds,
+    'minConfidence': analytics.minConfidence,
+  };
 
   /// Reads settings back, falling back to the default for any missing or
   /// unreadable field rather than failing to start.
   factory AppSettings.fromJson(Map<String, dynamic> json) {
     const fallback = AppSettings.defaults;
     return AppSettings(
-      captureRateHz: (json['captureRateHz'] as num?)?.toInt() ??
-          fallback.captureRateHz,
-      fieldPlayersOnCourt: (json['fieldPlayersOnCourt'] as num?)?.toInt() ??
+      captureRateHz:
+          (json['captureRateHz'] as num?)?.toInt() ?? fallback.captureRateHz,
+      fieldPlayersOnCourt:
+          (json['fieldPlayersOnCourt'] as num?)?.toInt() ??
           fallback.fieldPlayersOnCourt,
       substitutionIntervalSeconds:
           (json['substitutionIntervalSeconds'] as num?)?.toInt() ??
-              fallback.substitutionIntervalSeconds,
+          fallback.substitutionIntervalSeconds,
+      benchSideline: _enumByName(
+        BenchSideline.values,
+        json['benchSideline'],
+        fallback.benchSideline,
+      ),
+      crossesPerAttack:
+          (json['crossesPerAttack'] as num?)?.toDouble() ??
+          fallback.crossesPerAttack,
+      substitutionTiming: _enumByName(
+        SubstitutionTiming.values,
+        json['substitutionTiming'],
+        fallback.substitutionTiming,
+      ),
       receiverMountHeightMeters:
           (json['receiverMountHeightMeters'] as num?)?.toDouble() ??
-              fallback.receiverMountHeightMeters,
+          fallback.receiverMountHeightMeters,
       receiverMarginMeters:
           (json['receiverMarginMeters'] as num?)?.toDouble() ??
-              fallback.receiverMarginMeters,
+          fallback.receiverMarginMeters,
       analytics: AnalyticsThresholds(
-        maxPlausibleSpeedMps: (json['maxPlausibleSpeedMps'] as num?)
-                ?.toDouble() ??
+        maxPlausibleSpeedMps:
+            (json['maxPlausibleSpeedMps'] as num?)?.toDouble() ??
             fallback.analytics.maxPlausibleSpeedMps,
         speedWindow: Duration(
-          milliseconds: (json['speedWindowMillis'] as num?)?.toInt() ??
+          milliseconds:
+              (json['speedWindowMillis'] as num?)?.toInt() ??
               fallback.analytics.speedWindow.inMilliseconds,
         ),
-        minConfidence: (json['minConfidence'] as num?)?.toDouble() ??
+        minConfidence:
+            (json['minConfidence'] as num?)?.toDouble() ??
             fallback.analytics.minConfidence,
       ),
     );
@@ -176,22 +219,41 @@ class AppSettings {
           other.captureRateHz == captureRateHz &&
           other.fieldPlayersOnCourt == fieldPlayersOnCourt &&
           other.substitutionIntervalSeconds == substitutionIntervalSeconds &&
+          other.benchSideline == benchSideline &&
+          other.crossesPerAttack == crossesPerAttack &&
+          other.substitutionTiming == substitutionTiming &&
           other.receiverMountHeightMeters == receiverMountHeightMeters &&
           other.receiverMarginMeters == receiverMarginMeters &&
           other.analytics == analytics;
 
   @override
   int get hashCode => Object.hash(
-      captureRateHz,
-      fieldPlayersOnCourt,
-      substitutionIntervalSeconds,
-      receiverMountHeightMeters,
-      receiverMarginMeters,
-      analytics);
+    captureRateHz,
+    fieldPlayersOnCourt,
+    substitutionIntervalSeconds,
+    benchSideline,
+    crossesPerAttack,
+    substitutionTiming,
+    receiverMountHeightMeters,
+    receiverMarginMeters,
+    analytics,
+  );
 
   @override
-  String toString() => 'AppSettings(${captureRateHz}Hz, '
+  String toString() =>
+      'AppSettings(${captureRateHz}Hz, '
       '1+$fieldPlayersOnCourt, '
       'subs ${substitutesRotate ? '${substitutionIntervalSeconds}s' : 'off'}, '
+      '${substitutionTiming.displayName}, '
+      '${crossesPerAttack.toStringAsFixed(1)} crosses/attack, '
+      '${benchSideline.displayName}, '
       '$analytics)';
+}
+
+T _enumByName<T extends Enum>(List<T> values, Object? name, T fallback) {
+  if (name is! String) return fallback;
+  for (final value in values) {
+    if (value.name == name) return value;
+  }
+  return fallback;
 }

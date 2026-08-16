@@ -4,32 +4,36 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:kinetag/src/domain/domain.dart';
 import 'package:kinetag/src/tracking/simulator/match_simulation.dart';
 import 'package:kinetag/src/tracking/simulator/role_movement.dart';
+import 'package:kinetag/src/tracking/simulator/simulation_options.dart';
 import 'package:kinetag/src/tracking/simulator/simulated_squad.dart';
 
 const int _twentyHzMicros = 50000;
 
 MatchSimulation makeSimulation({int seed = 7}) => MatchSimulation(
-      court: Court.handball(),
-      squad: SimulatedSquad.handballTeams(),
-      seed: seed,
-    );
+  court: Court.handball(),
+  squad: SimulatedSquad.handballTeams(),
+  seed: seed,
+);
 
 /// Runs [seconds] of simulated match at 20 Hz and returns every frame.
 List<PositionFrame> run(MatchSimulation simulation, double seconds) {
   final frames = <PositionFrame>[];
   final steps = (seconds * 1e6 / _twentyHzMicros).round();
   for (var i = 1; i <= steps; i++) {
-    frames.add(simulation.advance(
-      dtMicros: _twentyHzMicros,
-      timestampMicros: i * _twentyHzMicros,
-    ));
+    frames.add(
+      simulation.advance(
+        dtMicros: _twentyHzMicros,
+        timestampMicros: i * _twentyHzMicros,
+      ),
+    );
   }
   return frames;
 }
 
 /// All samples for one tag, in time order.
-List<PositionSample> trackOf(List<PositionFrame> frames, String tagId) =>
-    [for (final f in frames) f.sampleForTag(tagId)!];
+List<PositionSample> trackOf(List<PositionFrame> frames, String tagId) => [
+  for (final f in frames) f.sampleForTag(tagId)!,
+];
 
 void main() {
   final court = Court.handball();
@@ -119,7 +123,7 @@ void main() {
         final v2 = _velocity(track[i - 1], track[i], dt);
         final acceleration =
             math.sqrt(math.pow(v2.$1 - v1.$1, 2) + math.pow(v2.$2 - v1.$2, 2)) /
-                dt;
+            dt;
         expect(acceleration, lessThan(8.0));
       }
     });
@@ -138,8 +142,11 @@ void main() {
           distance += track[i - 1].distanceTo(track[i]);
         }
         // Two minutes of handball: tens of metres at minimum, even in goal.
-        expect(distance, greaterThan(20.0),
-            reason: '${participant.role!.displayName} barely moved');
+        expect(
+          distance,
+          greaterThan(20.0),
+          reason: '${participant.role!.displayName} barely moved',
+        );
       }
     });
   });
@@ -184,8 +191,9 @@ void main() {
       final squad = SimulatedSquad.handballTeams();
       final frames = run(
         MatchSimulation(court: court, squad: squad, seed: 17),
-        // One full attack/defence period.
-        40,
+        // One full settled-attack/transition cycle is 50 seconds; sixty also
+        // confirms that the next possession holds its shape.
+        60,
       );
       final outfield = squad.participants
           .where((p) => p.role != PlayerRole.goalkeeper)
@@ -222,9 +230,77 @@ void main() {
       }
 
       for (final frame in frames) {
-        expect(centroidX(frame, TeamSide.home),
-            lessThan(centroidX(frame, TeamSide.away)));
+        expect(
+          centroidX(frame, TeamSide.home),
+          lessThan(centroidX(frame, TeamSide.away)),
+        );
       }
+    });
+  });
+
+  group('possessions and transitions', () {
+    test('each settled attack lasts twenty seconds before transition', () {
+      final simulation = makeSimulation();
+
+      expect(simulation.playPhase, 1.0);
+      expect(simulation.attackingSide, TeamSide.home);
+
+      run(simulation, 19.5);
+      expect(simulation.playPhase, 1.0);
+      expect(simulation.attackingSide, TeamSide.home);
+
+      run(simulation, 1.0);
+      expect(simulation.playPhase, lessThan(1.0));
+      expect(simulation.attackingSide, isNull);
+
+      run(simulation, 4.5);
+      expect(simulation.playPhase, -1.0);
+      expect(simulation.attackingSide, TeamSide.away);
+    });
+
+    test('wingers change ends ahead of the backs and playmaker', () {
+      final squad = SimulatedSquad.handballTeams();
+      final simulation = MatchSimulation(
+        court: court,
+        squad: squad,
+        seed: 71,
+        crossesPerAttack: 0,
+      );
+      final before = run(simulation, 20).last;
+      final during = run(simulation, 3).last;
+      final home = squad.forSide(TeamSide.home);
+      final wing = home.firstWhere((p) => p.role == PlayerRole.leftWing);
+      final playmaker = home.firstWhere((p) => p.role == PlayerRole.centreBack);
+
+      final wingProgress =
+          before.sampleForTag(wing.tagId)!.x -
+          during.sampleForTag(wing.tagId)!.x;
+      final playmakerProgress =
+          before.sampleForTag(playmaker.tagId)!.x -
+          during.sampleForTag(playmaker.tagId)!.x;
+
+      expect(wingProgress, greaterThan(playmakerProgress));
+    });
+
+    test('cross recurrence can enable or disable attacking lane swaps', () {
+      final fixed = MatchSimulation(
+        court: court,
+        squad: SimulatedSquad.handballTeams(),
+        seed: 73,
+        crossesPerAttack: 0,
+      );
+      final crossing = MatchSimulation(
+        court: court,
+        squad: SimulatedSquad.handballTeams(),
+        seed: 73,
+        crossesPerAttack: 3,
+      );
+
+      run(fixed, 100);
+      run(crossing, 100);
+
+      expect(fixed.crossCount, 0);
+      expect(crossing.crossCount, greaterThan(0));
     });
   });
 
@@ -251,7 +327,8 @@ void main() {
           expect(
             goalArea.contains(sample.x, sample.y),
             isFalse,
-            reason: '${sample.tagId} stood in a goal area at '
+            reason:
+                '${sample.tagId} stood in a goal area at '
                 '(${sample.x.toStringAsFixed(2)}, '
                 '${sample.y.toStringAsFixed(2)})',
           );
@@ -268,8 +345,9 @@ void main() {
         60,
       );
 
-      for (final keeper
-          in squad.participants.where((p) => p.role == PlayerRole.goalkeeper)) {
+      for (final keeper in squad.participants.where(
+        (p) => p.role == PlayerRole.goalkeeper,
+      )) {
         final track = trackOf(frames, keeper.tagId);
         expect(
           track.any((s) => goalArea.contains(s.x, s.y)),
@@ -300,8 +378,11 @@ void main() {
                 goalArea.contains(sample.x, sample.y, margin: 1.5))
               sample,
       ];
-      expect(approached, isNotEmpty,
-          reason: 'nobody came within 1.5 m of a goal area all match');
+      expect(
+        approached,
+        isNotEmpty,
+        reason: 'nobody came within 1.5 m of a goal area all match',
+      );
     });
   });
 
@@ -312,20 +393,36 @@ void main() {
     /// Rotation off, because these are about what a bench *is*; what happens
     /// when it turns over is the group below.
     MatchSimulation benchedSimulation() => MatchSimulation(
+      court: court,
+      squad: SimulatedSquad.handballTeams(fieldPlayersOnCourt: 4),
+      seed: 7,
+      substitutionInterval: Duration.zero,
+    );
+
+    test(
+      'both benches share the selected sideline, four metres from centre',
+      () {
+        final simulation = benchedSimulation();
+
+        expect(simulation.benchSeatAt(TeamSide.home, 0), (
+          20.0 - MatchSimulation.benchCentreGapMeters,
+          20.5,
+        ));
+        expect(simulation.benchSeatAt(TeamSide.away, 0), (
+          20.0 + MatchSimulation.benchCentreGapMeters,
+          20.5,
+        ));
+        expect(MatchSimulation.benchCentreGapMeters, 4.0);
+
+        final top = MatchSimulation(
           court: court,
           squad: SimulatedSquad.handballTeams(fieldPlayersOnCourt: 4),
-          seed: 7,
-          substitutionInterval: Duration.zero,
+          benchSideline: BenchSideline.top,
         );
-
-    test('seats sit half a metre outside a sideline, one side per team', () {
-      final simulation = benchedSimulation();
-
-      expect(simulation.benchSeatAt(TeamSide.home, 0),
-          (20.0 - MatchSimulation.benchCentreGapMeters, -0.5));
-      expect(simulation.benchSeatAt(TeamSide.away, 0),
-          (20.0 + MatchSimulation.benchCentreGapMeters, 20.5));
-    });
+        expect(top.benchSeatAt(TeamSide.home, 0).$2, -0.5);
+        expect(top.benchSeatAt(TeamSide.away, 0).$2, -0.5);
+      },
+    );
 
     test('substitutes stand next to each other on their own half', () {
       final simulation = benchedSimulation();
@@ -334,13 +431,17 @@ void main() {
         final first = simulation.benchSeatAt(side, 0);
         final second = simulation.benchSeatAt(side, 1);
 
-        expect((second.$1 - first.$1).abs(),
-            closeTo(MatchSimulation.benchSpacingMeters, 1e-9));
+        expect(
+          (second.$1 - first.$1).abs(),
+          closeTo(MatchSimulation.benchSpacingMeters, 1e-9),
+        );
         expect(second.$2, first.$2, reason: 'a bench is a straight line');
         // Home defends x = 0, so its bench runs back from the centre line
         // toward its own goal; away's mirrors it.
-        expect(side == TeamSide.home ? second.$1 < first.$1 : second.$1 > first.$1,
-            isTrue);
+        expect(
+          side == TeamSide.home ? second.$1 < first.$1 : second.$1 > first.$1,
+          isTrue,
+        );
       }
     });
 
@@ -353,7 +454,9 @@ void main() {
 
       for (final participant in benched) {
         final seat = simulation.benchSeatAt(
-            participant.side, participant.benchSeat!);
+          participant.side,
+          participant.benchSeat!,
+        );
         for (final sample in trackOf(frames, participant.tagId)) {
           expect(sample.x, closeTo(seat.$1, 1e-9));
           expect(sample.y, closeTo(seat.$2, 1e-9));
@@ -399,8 +502,11 @@ void main() {
                 math.pow(track[i].y - track[i - 1].y, 2),
           );
         }
-        expect(distance, greaterThan(5.0),
-            reason: '${participant.tagId} should be moving');
+        expect(
+          distance,
+          greaterThan(5.0),
+          reason: '${participant.tagId} should be moving',
+        );
       }
     });
   });
@@ -412,13 +518,12 @@ void main() {
     MatchSimulation rotatingSimulation({
       int seed = 7,
       Duration every = const Duration(seconds: 30),
-    }) =>
-        MatchSimulation(
-          court: court,
-          squad: SimulatedSquad.handballTeams(fieldPlayersOnCourt: 4),
-          seed: seed,
-          substitutionInterval: every,
-        );
+    }) => MatchSimulation(
+      court: court,
+      squad: SimulatedSquad.handballTeams(fieldPlayersOnCourt: 4),
+      seed: seed,
+      substitutionInterval: every,
+    );
 
     /// Whether a sample is on the floor of play, as opposed to on its way to
     /// or from the bench outside the sideline.
@@ -428,12 +533,14 @@ void main() {
         sample.y >= 0 &&
         sample.y <= court.heightMeters;
 
-    List<PositionSample> forSide(PositionFrame frame, SimulatedSquad squad,
-            TeamSide side) =>
-        [
-          for (final sample in frame.samples)
-            if (squad.participantForTag(sample.tagId)!.side == side) sample,
-        ];
+    List<PositionSample> forSide(
+      PositionFrame frame,
+      SimulatedSquad squad,
+      TeamSide side,
+    ) => [
+      for (final sample in frame.samples)
+        if (squad.participantForTag(sample.tagId)!.side == side) sample,
+    ];
 
     test('a substitute comes on and the player they replace goes off', () {
       final simulation = rotatingSimulation();
@@ -444,8 +551,11 @@ void main() {
 
       run(simulation, 60);
 
-      expect(simulation.isOnCourt(substitute.tagId), isTrue,
-          reason: 'the bench never emptied');
+      expect(
+        simulation.isOnCourt(substitute.tagId),
+        isTrue,
+        reason: 'the bench never emptied',
+      );
       expect(
         starters.where((p) => !simulation.isOnCourt(p.tagId)),
         isNotEmpty,
@@ -463,10 +573,16 @@ void main() {
 
       for (final frame in frames) {
         for (final side in TeamSide.values) {
-          final playing =
-              forSide(frame, squad, side).where(onPlayingSurface).length;
-          expect(playing, lessThanOrEqualTo(5),
-              reason: '${side.displayName} fielded an extra player');
+          final playing = forSide(
+            frame,
+            squad,
+            side,
+          ).where(onPlayingSurface).length;
+          expect(
+            playing,
+            lessThanOrEqualTo(5),
+            reason: '${side.displayName} fielded an extra player',
+          );
         }
       }
     });
@@ -495,8 +611,9 @@ void main() {
       // walk takes.
       final frames = run(simulation, 110);
 
-      final seated = simulation.squad.participants
-          .where((p) => !simulation.isOnCourt(p.tagId));
+      final seated = simulation.squad.participants.where(
+        (p) => !simulation.isOnCourt(p.tagId),
+      );
       expect(seated, isNotEmpty);
 
       for (final participant in seated) {
@@ -506,9 +623,11 @@ void main() {
             simulation.benchSeatAt(participant.side, seat),
         ];
         expect(
-          seats.any((s) =>
-              (s.$1 - last.x).abs() < MatchSimulation.benchArrivalMeters &&
-              (s.$2 - last.y).abs() < MatchSimulation.benchArrivalMeters),
+          seats.any(
+            (s) =>
+                (s.$1 - last.x).abs() < MatchSimulation.benchArrivalMeters &&
+                (s.$2 - last.y).abs() < MatchSimulation.benchArrivalMeters,
+          ),
           isTrue,
           reason: '${participant.tagId} is off but not at the bench',
         );
@@ -542,8 +661,9 @@ void main() {
       final simulation = rotatingSimulation(seed: 43);
       run(simulation, 180);
 
-      for (final keeper in simulation.squad.participants
-          .where((p) => p.role == PlayerRole.goalkeeper)) {
+      for (final keeper in simulation.squad.participants.where(
+        (p) => p.role == PlayerRole.goalkeeper,
+      )) {
         expect(simulation.isOnCourt(keeper.tagId), isTrue);
       }
     });
@@ -611,6 +731,33 @@ void main() {
       for (var i = 0; i < a.length; i++) {
         expect(a[i].samples, b[i].samples);
       }
+    });
+
+    test('attack-only exchanges wait until that side is attacking', () {
+      final simulation = MatchSimulation(
+        court: court,
+        squad: SimulatedSquad.handballTeams(fieldPlayersOnCourt: 4),
+        seed: 67,
+        substitutionInterval: const Duration(seconds: 30),
+        substitutionTiming: SubstitutionTiming.whileAttacking,
+      );
+      final homeStarters = simulation.squad
+          .forSide(TeamSide.home)
+          .where((participant) => participant.isOnCourt)
+          .toList();
+      final awayStarters = simulation.squad
+          .forSide(TeamSide.away)
+          .where((participant) => participant.isOnCourt)
+          .toList();
+
+      // At 30 s away is attacking. Its due exchange starts, while home waits.
+      run(simulation, 31);
+      expect(homeStarters.every((p) => simulation.isOnCourt(p.tagId)), isTrue);
+      expect(awayStarters.any((p) => !simulation.isOnCourt(p.tagId)), isTrue);
+
+      // Home's next settled attack begins at 50 s and releases its due call.
+      run(simulation, 20);
+      expect(homeStarters.any((p) => !simulation.isOnCourt(p.tagId)), isTrue);
     });
   });
 

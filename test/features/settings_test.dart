@@ -6,11 +6,13 @@ import 'package:kinetag/src/app/provider_overrides.dart';
 import 'package:kinetag/src/domain/domain.dart';
 import 'package:kinetag/src/features/settings/app_settings.dart';
 import 'package:kinetag/src/features/settings/settings_controller.dart';
+import 'package:kinetag/src/tracking/simulator/simulation_options.dart';
+import 'package:kinetag/src/tracking/simulator/simulator_tracking_source.dart';
 import 'package:kinetag/src/tracking/simulator/simulated_squad.dart';
 import 'package:kinetag/src/tracking/tracking_providers.dart';
 
 ({ProviderContainer container, SettingsController controller})
-    makeController() {
+makeController() {
   final container = ProviderContainer();
   addTearDown(container.dispose);
   return (
@@ -52,6 +54,9 @@ void main() {
       // 1 + 5 is PlayerRole.defaultLineup, so the default roster starts with
       // an empty bench.
       expect(settings.fieldPlayersOnCourt, 5);
+      expect(settings.benchSideline, BenchSideline.bottom);
+      expect(settings.crossesPerAttack, 0.5);
+      expect(settings.substitutionTiming, SubstitutionTiming.anyTime);
     });
   });
 
@@ -60,18 +65,26 @@ void main() {
       final c = makeController();
 
       c.controller.setCaptureRateHz(0);
-      expect(readState(c.container).captureRateHz, AppSettings.minCaptureRateHz);
+      expect(
+        readState(c.container).captureRateHz,
+        AppSettings.minCaptureRateHz,
+      );
 
       c.controller.setCaptureRateHz(10000);
-      expect(readState(c.container).captureRateHz, AppSettings.maxCaptureRateHz);
+      expect(
+        readState(c.container).captureRateHz,
+        AppSettings.maxCaptureRateHz,
+      );
     });
 
     test('keeps the speed window long enough to be meaningful', () {
       final c = makeController();
 
       c.controller.setSpeedWindow(Duration.zero);
-      expect(readState(c.container).analytics.speedWindow,
-          AnalyticsThresholds.minSpeedWindow);
+      expect(
+        readState(c.container).analytics.speedWindow,
+        AnalyticsThresholds.minSpeedWindow,
+      );
     });
 
     test('keeps confidence a probability', () {
@@ -88,20 +101,42 @@ void main() {
       final c = makeController();
 
       c.controller.setFieldPlayersOnCourt(1);
-      expect(readState(c.container).fieldPlayersOnCourt,
-          SimulatedSquad.minFieldPlayersOnCourt);
+      expect(
+        readState(c.container).fieldPlayersOnCourt,
+        SimulatedSquad.minFieldPlayersOnCourt,
+      );
 
       c.controller.setFieldPlayersOnCourt(30);
-      expect(readState(c.container).fieldPlayersOnCourt,
-          SimulatedSquad.maxFieldPlayersOnCourt);
+      expect(
+        readState(c.container).fieldPlayersOnCourt,
+        SimulatedSquad.maxFieldPlayersOnCourt,
+      );
     });
 
     test('keeps the mounting height above the floor', () {
       final c = makeController();
 
       c.controller.setReceiverMountHeightMeters(-5);
-      expect(readState(c.container).receiverMountHeightMeters,
-          AppSettings.minMountHeightMeters);
+      expect(
+        readState(c.container).receiverMountHeightMeters,
+        AppSettings.minMountHeightMeters,
+      );
+    });
+
+    test('keeps crossing recurrence inside the offered range', () {
+      final c = makeController();
+
+      c.controller.setCrossesPerAttack(-1);
+      expect(
+        readState(c.container).crossesPerAttack,
+        AppSettings.minCrossesPerAttack,
+      );
+
+      c.controller.setCrossesPerAttack(99);
+      expect(
+        readState(c.container).crossesPerAttack,
+        AppSettings.maxCrossesPerAttack,
+      );
     });
   });
 
@@ -135,7 +170,9 @@ void main() {
 
   group('the line-up reaches the simulated squad', () {
     test('choosing 1 + 4 benches the players it leaves out', () {
-      final container = ProviderContainer(overrides: kinetagProviderOverrides());
+      final container = ProviderContainer(
+        overrides: kinetagProviderOverrides(),
+      );
       addTearDown(container.dispose);
 
       // The default roster is two teams of six, all fielded at 1 + 5.
@@ -148,25 +185,33 @@ void main() {
       expect(squad.onCourt, hasLength(10));
       expect(squad.benched, hasLength(2));
       for (final side in TeamSide.values) {
-        expect(squad.forSide(side).where((p) => !p.isOnCourt).single.benchSeat,
-            0);
+        expect(
+          squad.forSide(side).where((p) => !p.isOnCourt).single.benchSeat,
+          0,
+        );
       }
     });
   });
 
   group('the substitution interval reaches the tracking source', () {
     test('it defaults to a minute and follows the setting', () {
-      final container = ProviderContainer(overrides: kinetagProviderOverrides());
+      final container = ProviderContainer(
+        overrides: kinetagProviderOverrides(),
+      );
       addTearDown(container.dispose);
 
-      expect(container.read(trackingSubstitutionIntervalProvider),
-          const Duration(minutes: 1));
+      expect(
+        container.read(trackingSubstitutionIntervalProvider),
+        const Duration(minutes: 1),
+      );
 
       container
           .read(appSettingsProvider.notifier)
           .setSubstitutionIntervalSeconds(120);
-      expect(container.read(trackingSubstitutionIntervalProvider),
-          const Duration(minutes: 2));
+      expect(
+        container.read(trackingSubstitutionIntervalProvider),
+        const Duration(minutes: 2),
+      );
     });
 
     test('turning it off is a zero interval, not a clamped one', () {
@@ -179,11 +224,42 @@ void main() {
       // Anything positive is held inside the usable range: below the minimum a
       // substitute would still be walking on when the next call came.
       c.controller.setSubstitutionIntervalSeconds(3);
-      expect(readState(c.container).substitutionIntervalSeconds,
-          AppSettings.minSubstitutionIntervalSeconds);
+      expect(
+        readState(c.container).substitutionIntervalSeconds,
+        AppSettings.minSubstitutionIntervalSeconds,
+      );
       c.controller.setSubstitutionIntervalSeconds(9999);
-      expect(readState(c.container).substitutionIntervalSeconds,
-          AppSettings.maxSubstitutionIntervalSeconds);
+      expect(
+        readState(c.container).substitutionIntervalSeconds,
+        AppSettings.maxSubstitutionIntervalSeconds,
+      );
+    });
+  });
+
+  group('simulation choices reach the tracking source', () {
+    test('bench side, crossing rate, and timing follow settings', () {
+      final container = ProviderContainer(
+        overrides: kinetagProviderOverrides(),
+      );
+      addTearDown(container.dispose);
+      final controller = container.read(appSettingsProvider.notifier);
+
+      controller.setBenchSideline(BenchSideline.top);
+      controller.setCrossesPerAttack(1.5);
+      controller.setSubstitutionTiming(SubstitutionTiming.whileAttacking);
+
+      expect(container.read(trackingBenchSidelineProvider), BenchSideline.top);
+      expect(container.read(trackingCrossesPerAttackProvider), 1.5);
+      expect(
+        container.read(trackingSubstitutionTimingProvider),
+        SubstitutionTiming.whileAttacking,
+      );
+
+      final source =
+          container.read(trackingSourceProvider) as SimulatorTrackingSource;
+      expect(source.benchSideline, BenchSideline.top);
+      expect(source.crossesPerAttack, 1.5);
+      expect(source.substitutionTiming, SubstitutionTiming.whileAttacking);
     });
   });
 
@@ -220,13 +296,15 @@ void main() {
 
       final sharp = SessionMetrics.fromSamples(
         samples,
-        thresholds:
-            const AnalyticsThresholds(speedWindow: Duration(milliseconds: 100)),
+        thresholds: const AnalyticsThresholds(
+          speedWindow: Duration(milliseconds: 100),
+        ),
       ).forTag('tag-1')!;
       final smooth = SessionMetrics.fromSamples(
         samples,
-        thresholds:
-            const AnalyticsThresholds(speedWindow: Duration(milliseconds: 800)),
+        thresholds: const AnalyticsThresholds(
+          speedWindow: Duration(milliseconds: 800),
+        ),
       ).forTag('tag-1')!;
 
       expect(sharp.maxSpeedMps, greaterThan(smooth.maxSpeedMps));
@@ -261,8 +339,10 @@ void main() {
       const thresholds = AnalyticsThresholds(maxPlausibleSpeedMps: 7.0);
 
       expect(
-        SessionMetrics.fromSamples(straightTrack(), thresholds: thresholds)
-            .thresholds,
+        SessionMetrics.fromSamples(
+          straightTrack(),
+          thresholds: thresholds,
+        ).thresholds,
         thresholds,
       );
     });
@@ -272,6 +352,9 @@ void main() {
     test('round-trips every field', () {
       const settings = AppSettings(
         captureRateHz: 64,
+        benchSideline: BenchSideline.top,
+        crossesPerAttack: 2.5,
+        substitutionTiming: SubstitutionTiming.whileAttacking,
         receiverMountHeightMeters: 3.1,
         receiverMarginMeters: 0.75,
         analytics: AnalyticsThresholds(

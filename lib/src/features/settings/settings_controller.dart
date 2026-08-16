@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../analytics/analytics_thresholds.dart';
 import '../../tracking/simulator/simulated_squad.dart';
+import '../../tracking/simulator/simulation_options.dart';
 import 'app_settings.dart';
 
 /// Owns [AppSettings] and clamps every write into a usable range.
@@ -15,16 +16,18 @@ class SettingsController extends Notifier<AppSettings> {
   AppSettings build() => AppSettings.defaults;
 
   void setCaptureRateHz(int hz) => state = state.copyWith(
-        captureRateHz:
-            hz.clamp(AppSettings.minCaptureRateHz, AppSettings.maxCaptureRateHz),
-      );
+    captureRateHz: hz.clamp(
+      AppSettings.minCaptureRateHz,
+      AppSettings.maxCaptureRateHz,
+    ),
+  );
 
   void setFieldPlayersOnCourt(int count) => state = state.copyWith(
-        fieldPlayersOnCourt: count.clamp(
-          SimulatedSquad.minFieldPlayersOnCourt,
-          SimulatedSquad.maxFieldPlayersOnCourt,
-        ),
-      );
+    fieldPlayersOnCourt: count.clamp(
+      SimulatedSquad.minFieldPlayersOnCourt,
+      SimulatedSquad.maxFieldPlayersOnCourt,
+    ),
+  );
 
   /// Sets the rotation period, or turns rotation off with anything at or below
   /// zero.
@@ -33,62 +36,75 @@ class SettingsController extends Notifier<AppSettings> {
   /// without substitutions is a match — so it is snapped to rather than
   /// clamped away.
   void setSubstitutionIntervalSeconds(int seconds) => state = state.copyWith(
-        substitutionIntervalSeconds: seconds <= 0
-            ? AppSettings.substitutionOffSeconds
-            : seconds.clamp(
-                AppSettings.minSubstitutionIntervalSeconds,
-                AppSettings.maxSubstitutionIntervalSeconds,
-              ),
-      );
+    substitutionIntervalSeconds: seconds <= 0
+        ? AppSettings.substitutionOffSeconds
+        : seconds.clamp(
+            AppSettings.minSubstitutionIntervalSeconds,
+            AppSettings.maxSubstitutionIntervalSeconds,
+          ),
+  );
+
+  void setBenchSideline(BenchSideline sideline) =>
+      state = state.copyWith(benchSideline: sideline);
+
+  void setCrossesPerAttack(double crosses) => state = state.copyWith(
+    crossesPerAttack: crosses.clamp(
+      AppSettings.minCrossesPerAttack,
+      AppSettings.maxCrossesPerAttack,
+    ),
+  );
+
+  void setSubstitutionTiming(SubstitutionTiming timing) =>
+      state = state.copyWith(substitutionTiming: timing);
 
   void setReceiverMountHeightMeters(double metres) => state = state.copyWith(
-        receiverMountHeightMeters: metres.clamp(
-          AppSettings.minMountHeightMeters,
-          AppSettings.maxMountHeightMeters,
-        ),
-      );
+    receiverMountHeightMeters: metres.clamp(
+      AppSettings.minMountHeightMeters,
+      AppSettings.maxMountHeightMeters,
+    ),
+  );
 
   void setReceiverMarginMeters(double metres) => state = state.copyWith(
-        receiverMarginMeters: metres.clamp(
-          AppSettings.minReceiverMarginMeters,
-          AppSettings.maxReceiverMarginMeters,
-        ),
-      );
+    receiverMarginMeters: metres.clamp(
+      AppSettings.minReceiverMarginMeters,
+      AppSettings.maxReceiverMarginMeters,
+    ),
+  );
 
   void setMaxPlausibleSpeedMps(double mps) => _updateAnalytics(
-        (a) => a.copyWith(
-          maxPlausibleSpeedMps: mps.clamp(
-            AnalyticsThresholds.minSpeedCeilingMps,
-            AnalyticsThresholds.maxSpeedCeilingMps,
-          ),
-        ),
-      );
+    (a) => a.copyWith(
+      maxPlausibleSpeedMps: mps.clamp(
+        AnalyticsThresholds.minSpeedCeilingMps,
+        AnalyticsThresholds.maxSpeedCeilingMps,
+      ),
+    ),
+  );
 
   void setSpeedWindow(Duration window) => _updateAnalytics(
-        (a) => a.copyWith(
-          speedWindow: Duration(
-            milliseconds: window.inMilliseconds.clamp(
-              AnalyticsThresholds.minSpeedWindow.inMilliseconds,
-              AnalyticsThresholds.maxSpeedWindow.inMilliseconds,
-            ),
-          ),
+    (a) => a.copyWith(
+      speedWindow: Duration(
+        milliseconds: window.inMilliseconds.clamp(
+          AnalyticsThresholds.minSpeedWindow.inMilliseconds,
+          AnalyticsThresholds.maxSpeedWindow.inMilliseconds,
         ),
-      );
+      ),
+    ),
+  );
 
   void setMinConfidence(double confidence) => _updateAnalytics(
-        (a) => a.copyWith(minConfidence: confidence.clamp(0.0, 1.0)),
-      );
+    (a) => a.copyWith(minConfidence: confidence.clamp(0.0, 1.0)),
+  );
 
   void resetToDefaults() => state = AppSettings.defaults;
 
   void _updateAnalytics(
     AnalyticsThresholds Function(AnalyticsThresholds) update,
-  ) =>
-      state = state.copyWith(analytics: update(state.analytics));
+  ) => state = state.copyWith(analytics: update(state.analytics));
 }
 
-final appSettingsProvider =
-    NotifierProvider<SettingsController, AppSettings>(SettingsController.new);
+final appSettingsProvider = NotifierProvider<SettingsController, AppSettings>(
+  SettingsController.new,
+);
 
 /// The analytics thresholds alone.
 ///

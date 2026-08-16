@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../analytics/analytics_thresholds.dart';
 import '../../core/duration_format.dart';
+import '../../tracking/simulator/simulation_options.dart';
 import '../../tracking/simulator/simulated_squad.dart';
 import '../live/live_controller.dart';
 import 'app_settings.dart';
@@ -54,7 +55,8 @@ class SettingsScreen extends ConsumerWidget {
             const SizedBox(height: 20),
             _SettingsSection(
               title: 'Capture',
-              description: 'How position data is produced. Applies to the next '
+              description:
+                  'How position data is produced. Applies to the next '
                   'connection.',
               children: [
                 _SettingSlider(
@@ -64,15 +66,16 @@ class SettingsScreen extends ConsumerWidget {
                   min: AppSettings.minCaptureRateHz.toDouble(),
                   max: AppSettings.maxCaptureRateHz.toDouble(),
                   divisions:
-                      AppSettings.maxCaptureRateHz - AppSettings.minCaptureRateHz,
+                      AppSettings.maxCaptureRateHz -
+                      AppSettings.minCaptureRateHz,
                   enabled: !isRecording,
                   description: isRecording
                       ? 'Locked while recording: a rate that changed mid-capture '
-                          'would corrupt every speed and distance derived from '
-                          'the session.'
+                            'would corrupt every speed and distance derived from '
+                            'the session.'
                       : 'Frames per second per tag. Higher rates resolve fast '
-                          'changes of direction but produce proportionally more '
-                          'samples to store.',
+                            'changes of direction but produce proportionally more '
+                            'samples to store.',
                   onChanged: (v) => controller.setCaptureRateHz(v.round()),
                 ),
               ],
@@ -80,7 +83,8 @@ class SettingsScreen extends ConsumerWidget {
             const SizedBox(height: 20),
             _SettingsSection(
               title: 'Line-up',
-              description: 'How many players each side fields, and how often '
+              description:
+                  'How many players each side fields, and how often '
                   'they change. Applies to the next connection.',
               children: [
                 _SettingSegments(
@@ -89,15 +93,50 @@ class SettingsScreen extends ConsumerWidget {
                   enabled: !isRecording,
                   description: isRecording
                       ? 'Locked while recording: changing who is on court '
-                          'restarts the simulation, which would cut the open '
-                          'session in half.'
+                            'restarts the simulation, which would cut the open '
+                            'session in half.'
                       : 'A goalkeeper plus this many field players per side, '
-                          'picked in roster order. Everyone the roster holds '
-                          'beyond the line-up waits on the bench, half a metre '
-                          'outside the sideline, and is still tracked there — '
-                          'a substitute covers no ground, which is what makes '
-                          'them tell apart in the analytics.',
+                            'picked in roster order. Everyone the roster holds '
+                            'beyond the line-up waits on the bench and is still '
+                            'tracked there — '
+                            'a substitute covers no ground, which is what makes '
+                            'them tell apart in the analytics.',
                   onChanged: controller.setFieldPlayersOnCourt,
+                ),
+                _SettingChoice<BenchSideline>(
+                  label: 'Bench sideline',
+                  value: settings.benchSideline,
+                  options: BenchSideline.values,
+                  optionLabel: (side) => side.displayName,
+                  enabled: !isRecording,
+                  description: isRecording
+                      ? 'Locked while recording: moving the benches would '
+                            'move every substitute’s live position.'
+                      : 'Both teams share this side of the pitch. Their first '
+                            'seats start 4 m either side of the centre line, '
+                            'half a metre beyond the sideline.',
+                  onChanged: controller.setBenchSideline,
+                ),
+                _SettingSlider(
+                  label: 'Crosses per attack',
+                  valueLabel:
+                      '${settings.crossesPerAttack.toStringAsFixed(1)} per attack',
+                  value: settings.crossesPerAttack,
+                  min: AppSettings.minCrossesPerAttack,
+                  max: AppSettings.maxCrossesPerAttack,
+                  divisions:
+                      ((AppSettings.maxCrossesPerAttack -
+                                  AppSettings.minCrossesPerAttack) *
+                              2)
+                          .round(),
+                  enabled: !isRecording,
+                  description: isRecording
+                      ? 'Locked while recording: crossing is part of the '
+                            'simulated movement being captured.'
+                      : 'Average lane swaps during each 20-second attack. '
+                            '0.5 means roughly one cross every two attacks; '
+                            'zero keeps the attacking formation fixed.',
+                  onChanged: controller.setCrossesPerAttack,
                 ),
                 _SettingSlider(
                   label: 'Substitution interval',
@@ -110,28 +149,46 @@ class SettingsScreen extends ConsumerWidget {
                   // One stop per 15 s, with "off" at the bottom of the scale.
                   divisions:
                       AppSettings.maxSubstitutionIntervalSeconds ~/
-                          AppSettings.minSubstitutionIntervalSeconds,
+                      AppSettings.minSubstitutionIntervalSeconds,
                   enabled: !isRecording,
                   description: isRecording
                       ? 'Locked while recording: the rotation is part of the '
-                          'simulation, and restarting it would cut the open '
-                          'session in half.'
+                            'simulation, and restarting it would cut the open '
+                            'session in half.'
                       : 'How often each side swaps its longest-serving field '
-                          'player for its longest-waiting substitute. The '
-                          'player coming off walks to the bench first and only '
-                          'then does the substitute step on, so a side is '
-                          'never briefly seven strong. A side with nobody on '
-                          'the bench has nothing to swap; at Off, whoever '
-                          'starts plays the whole session.',
+                            'player for its longest-waiting substitute. The '
+                            'player coming off walks to the bench first and only '
+                            'then does the substitute step on, so a side is '
+                            'never briefly seven strong. A side with nobody on '
+                            'the bench has nothing to swap; at Off, whoever '
+                            'starts plays the whole session.',
                   onChanged: (v) =>
                       controller.setSubstitutionIntervalSeconds(v.round()),
+                ),
+                _SettingChoice<SubstitutionTiming>(
+                  label: 'Substitution timing',
+                  value: settings.substitutionTiming,
+                  options: SubstitutionTiming.values,
+                  optionLabel: (timing) => timing.displayName,
+                  enabled: !isRecording && settings.substitutesRotate,
+                  description: isRecording
+                      ? 'Locked while recording: substitution timing is part '
+                            'of the simulation being captured.'
+                      : settings.substitutesRotate
+                      ? 'Any time starts a due exchange immediately. While '
+                            'attacking holds it until that team has settled '
+                            'into its next attack.'
+                      : 'Turn substitutions on to choose when a due '
+                            'exchange may begin.',
+                  onChanged: controller.setSubstitutionTiming,
                 ),
               ],
             ),
             const SizedBox(height: 20),
             _SettingsSection(
               title: 'Noise rejection',
-              description: 'How movement metrics separate real running from '
+              description:
+                  'How movement metrics separate real running from '
                   'positioning error. Changing these recomputes every '
                   'session’s figures — no stored data is altered.',
               children: [
@@ -142,11 +199,13 @@ class SettingsScreen extends ConsumerWidget {
                   value: settings.analytics.maxPlausibleSpeedMps,
                   min: AnalyticsThresholds.minSpeedCeilingMps,
                   max: AnalyticsThresholds.maxSpeedCeilingMps,
-                  divisions: ((AnalyticsThresholds.maxSpeedCeilingMps -
-                              AnalyticsThresholds.minSpeedCeilingMps) *
-                          2)
-                      .round(),
-                  description: 'Steps implying more than this are discarded as '
+                  divisions:
+                      ((AnalyticsThresholds.maxSpeedCeilingMps -
+                                  AnalyticsThresholds.minSpeedCeilingMps) *
+                              2)
+                          .round(),
+                  description:
+                      'Steps implying more than this are discarded as '
                       'bad fixes. Elite sprinters peak near 12 m/s; a single '
                       'glitch and back would otherwise add tens of phantom '
                       'metres to a player’s distance.',
@@ -156,29 +215,33 @@ class SettingsScreen extends ConsumerWidget {
                   label: 'Speed window',
                   valueLabel:
                       '${settings.analytics.speedWindow.inMilliseconds} ms',
-                  value:
-                      settings.analytics.speedWindow.inMilliseconds.toDouble(),
+                  value: settings.analytics.speedWindow.inMilliseconds
+                      .toDouble(),
                   min: AnalyticsThresholds.minSpeedWindow.inMilliseconds
                       .toDouble(),
                   max: AnalyticsThresholds.maxSpeedWindow.inMilliseconds
                       .toDouble(),
                   divisions: 19,
-                  description: 'Speeds are measured over at least this much '
+                  description:
+                      'Speeds are measured over at least this much '
                       'time. Shorter windows track sharp accelerations; longer '
                       'ones stop centimetre-scale position error from '
                       'dominating the result.',
-                  onChanged: (v) => controller
-                      .setSpeedWindow(Duration(milliseconds: v.round())),
+                  onChanged: (v) => controller.setSpeedWindow(
+                    Duration(milliseconds: v.round()),
+                  ),
                 ),
                 _SettingSlider(
                   label: 'Minimum confidence',
-                  valueLabel:
-                      settings.analytics.minConfidence.toStringAsFixed(2),
+                  valueLabel: settings.analytics.minConfidence.toStringAsFixed(
+                    2,
+                  ),
                   value: settings.analytics.minConfidence,
                   min: 0,
                   max: 1,
                   divisions: 20,
-                  description: 'Samples the positioning engine reports below '
+                  description:
+                      'Samples the positioning engine reports below '
                       'this quality are ignored entirely. Leave at 0 with the '
                       'simulator, where confidence is synthetic.',
                   onChanged: controller.setMinConfidence,
@@ -188,7 +251,8 @@ class SettingsScreen extends ConsumerWidget {
             const SizedBox(height: 20),
             _SettingsSection(
               title: 'Receiver defaults',
-              description: 'Used when a layout is generated in setup. Anchors '
+              description:
+                  'Used when a layout is generated in setup. Anchors '
                   'already placed are left where they are.',
               children: [
                 _SettingSlider(
@@ -199,7 +263,8 @@ class SettingsScreen extends ConsumerWidget {
                   min: AppSettings.minMountHeightMeters,
                   max: AppSettings.maxMountHeightMeters,
                   divisions: 44,
-                  description: 'Height above the floor. UWB ranging measures '
+                  description:
+                      'Height above the floor. UWB ranging measures '
                       'true line-of-sight distance, so this genuinely affects '
                       'anchor geometry.',
                   onChanged: controller.setReceiverMountHeightMeters,
@@ -212,7 +277,8 @@ class SettingsScreen extends ConsumerWidget {
                   min: AppSettings.minReceiverMarginMeters,
                   max: AppSettings.maxReceiverMarginMeters,
                   divisions: 20,
-                  description: 'How far beyond the sidelines a generated '
+                  description:
+                      'How far beyond the sidelines a generated '
                       'layout places anchors.',
                   onChanged: controller.setReceiverMarginMeters,
                 ),
@@ -222,8 +288,9 @@ class SettingsScreen extends ConsumerWidget {
             Text(
               'Settings apply for as long as the app is running; like the '
               'court layout, they are not yet stored between launches.',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ],
         ),
@@ -259,8 +326,9 @@ class _SettingsSection extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               description,
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: 12),
             ...children,
@@ -299,9 +367,11 @@ class _SettingSegments extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final options = [
-      for (var n = SimulatedSquad.minFieldPlayersOnCourt;
-          n <= SimulatedSquad.maxFieldPlayersOnCourt;
-          n++)
+      for (
+        var n = SimulatedSquad.minFieldPlayersOnCourt;
+        n <= SimulatedSquad.maxFieldPlayersOnCourt;
+        n++
+      )
         n,
     ];
 
@@ -322,14 +392,73 @@ class _SettingSegments extends StatelessWidget {
             ],
             selected: {value},
             showSelectedIcon: false,
-            onSelectionChanged:
-                enabled ? (selection) => onChanged(selection.first) : null,
+            onSelectionChanged: enabled
+                ? (selection) => onChanged(selection.first)
+                : null,
           ),
           const SizedBox(height: 8),
           Text(
             description,
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A labelled segmented choice used by non-numeric simulation options.
+class _SettingChoice<T> extends StatelessWidget {
+  final String label;
+  final String description;
+  final T value;
+  final List<T> options;
+  final String Function(T option) optionLabel;
+  final bool enabled;
+  final ValueChanged<T> onChanged;
+
+  const _SettingChoice({
+    required this.label,
+    required this.description,
+    required this.value,
+    required this.options,
+    required this.optionLabel,
+    required this.onChanged,
+    this.enabled = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: theme.textTheme.titleSmall),
+          const SizedBox(height: 8),
+          SegmentedButton<T>(
+            segments: [
+              for (final option in options)
+                ButtonSegment<T>(
+                  value: option,
+                  label: Text(optionLabel(option)),
+                ),
+            ],
+            selected: {value},
+            showSelectedIcon: false,
+            onSelectionChanged: enabled
+                ? (selection) => onChanged(selection.first)
+                : null,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            description,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
         ],
       ),
@@ -393,8 +522,9 @@ class _SettingSlider extends StatelessWidget {
           ),
           Text(
             description,
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
         ],
       ),

@@ -8,6 +8,7 @@ import 'package:kinetag/src/features/settings/settings_controller.dart';
 import 'package:kinetag/src/features/settings/settings_screen.dart';
 import 'package:kinetag/src/features/setup/roster_panel.dart';
 import 'package:kinetag/src/features/setup/setup_screen.dart';
+import 'package:kinetag/src/tracking/simulator/simulation_options.dart';
 
 late ProviderContainer container;
 
@@ -49,11 +50,18 @@ AppSettings get settings => container.read(appSettingsProvider);
 /// layout decision, and a test that encodes it fails every time a setting is
 /// added between two others.
 Finder sliderFor(String label) => find.descendant(
-      of: find
-          .ancestor(of: find.text(label), matching: find.byType(Column))
-          .first,
-      matching: find.byType(Slider),
-    );
+  of: find.ancestor(of: find.text(label), matching: find.byType(Column)).first,
+  matching: find.byType(Slider),
+);
+
+Future<void> reveal(WidgetTester tester, String text) async {
+  await tester.scrollUntilVisible(
+    find.text(text),
+    250,
+    scrollable: find.byType(Scrollable).first,
+  );
+  await tester.pumpAndSettle();
+}
 
 void main() {
   testWidgets('shows the current values of every setting', (tester) async {
@@ -61,30 +69,34 @@ void main() {
 
     expect(find.text('Settings'), findsOneWidget);
     expect(find.text('20 Hz'), findsOneWidget);
+    expect(find.text('0.5 per attack'), findsOneWidget);
+    await reveal(tester, 'Implausible speed threshold');
     expect(find.text('12.0 m/s'), findsOneWidget);
     expect(find.text('200 ms'), findsOneWidget);
   });
 
-  testWidgets('dragging a slider changes the setting it controls',
-      (tester) async {
+  testWidgets('dragging a slider changes the setting it controls', (
+    tester,
+  ) async {
     await pump(tester, const SettingsScreen());
     final before = settings.analytics.maxPlausibleSpeedMps;
 
     // Settings are a scrolling list, and a drag aimed at a widget below the
     // fold lands on whatever is there instead.
-    await tester.ensureVisible(sliderFor('Implausible speed threshold'));
-    await tester.pumpAndSettle();
+    await reveal(tester, 'Implausible speed threshold');
     await tester.drag(
-        sliderFor('Implausible speed threshold'), const Offset(-80, 0));
+      sliderFor('Implausible speed threshold'),
+      const Offset(-80, 0),
+    );
     await tester.pumpAndSettle();
 
     expect(settings.analytics.maxPlausibleSpeedMps, lessThan(before));
-    expect(settings.analytics.maxPlausibleSpeedMps,
-        greaterThanOrEqualTo(4.0));
+    expect(settings.analytics.maxPlausibleSpeedMps, greaterThanOrEqualTo(4.0));
   });
 
-  testWidgets('reset is offered only once something has changed',
-      (tester) async {
+  testWidgets('reset is offered only once something has changed', (
+    tester,
+  ) async {
     await pump(tester, const SettingsScreen());
 
     final reset = find.widgetWithText(TextButton, 'Reset to defaults');
@@ -99,16 +111,20 @@ void main() {
     expect(settings, AppSettings.defaults);
   });
 
-  testWidgets('the capture rate is editable when nothing is recording',
-      (tester) async {
+  testWidgets('the capture rate is editable when nothing is recording', (
+    tester,
+  ) async {
     await pump(tester, const SettingsScreen());
 
-    expect(tester.widget<Slider>(sliderFor('Capture rate')).onChanged,
-        isNotNull);
+    expect(
+      tester.widget<Slider>(sliderFor('Capture rate')).onChanged,
+      isNotNull,
+    );
   });
 
-  testWidgets('the capture rate is locked while a recording is open',
-      (tester) async {
+  testWidgets('the capture rate is locked while a recording is open', (
+    tester,
+  ) async {
     // A rate that changed mid-capture would corrupt every rate-dependent
     // metric derived from the session.
     await pump(tester, const SettingsScreen(), recording: true);
@@ -120,8 +136,9 @@ void main() {
     );
   });
 
-  testWidgets('picking a line-up changes how many players are fielded',
-      (tester) async {
+  testWidgets('picking a line-up changes how many players are fielded', (
+    tester,
+  ) async {
     await pump(tester, const SettingsScreen());
 
     expect(settings.fieldPlayersOnCourt, 5);
@@ -135,8 +152,9 @@ void main() {
     expect(settings.fieldPlayersOnCourt, 6);
   });
 
-  testWidgets('the line-up is locked while a recording is open',
-      (tester) async {
+  testWidgets('the line-up is locked while a recording is open', (
+    tester,
+  ) async {
     // Substituting rebuilds the tracking source, which would end the open
     // session's stream halfway through it.
     await pump(tester, const SettingsScreen(), recording: true);
@@ -153,8 +171,9 @@ void main() {
     );
   });
 
-  testWidgets('substitutions default to once a minute and can be turned off',
-      (tester) async {
+  testWidgets('substitutions default to once a minute and can be turned off', (
+    tester,
+  ) async {
     await pump(tester, const SettingsScreen());
 
     expect(settings.substitutionIntervalSeconds, 60);
@@ -165,15 +184,19 @@ void main() {
     // real way to play rather than an invalid interval.
     await tester.ensureVisible(sliderFor('Substitution interval'));
     await tester.pumpAndSettle();
-    await tester.drag(sliderFor('Substitution interval'), const Offset(-600, 0));
+    await tester.drag(
+      sliderFor('Substitution interval'),
+      const Offset(-600, 0),
+    );
     await tester.pumpAndSettle();
 
     expect(settings.substitutesRotate, isFalse);
     expect(find.text('Off'), findsOneWidget);
   });
 
-  testWidgets('the substitution interval is locked while a recording is open',
-      (tester) async {
+  testWidgets('the substitution interval is locked while a recording is open', (
+    tester,
+  ) async {
     await pump(tester, const SettingsScreen(), recording: true);
 
     expect(
@@ -182,20 +205,46 @@ void main() {
     );
   });
 
-  testWidgets('the analytics sliders stay editable while recording',
-      (tester) async {
+  testWidgets(
+    'bench side, crossing rate, and substitution timing are editable',
+    (tester) async {
+      await pump(tester, const SettingsScreen());
+
+      expect(settings.benchSideline, BenchSideline.bottom);
+      await reveal(tester, 'Bench sideline');
+      await tester.tap(find.text('Top sideline'));
+      await tester.pumpAndSettle();
+      expect(settings.benchSideline, BenchSideline.top);
+
+      await reveal(tester, 'Crosses per attack');
+      await tester.drag(sliderFor('Crosses per attack'), const Offset(120, 0));
+      await tester.pumpAndSettle();
+      expect(settings.crossesPerAttack, greaterThan(0.5));
+
+      await reveal(tester, 'Substitution timing');
+      await tester.tap(find.text('While attacking'));
+      await tester.pumpAndSettle();
+      expect(settings.substitutionTiming, SubstitutionTiming.whileAttacking);
+    },
+  );
+
+  testWidgets('the analytics sliders stay editable while recording', (
+    tester,
+  ) async {
     // They only change how stored samples are interpreted, so locking them
     // would be pointless friction.
     await pump(tester, const SettingsScreen(), recording: true);
 
+    await reveal(tester, 'Implausible speed threshold');
     expect(
       tester.widget<Slider>(sliderFor('Implausible speed threshold')).onChanged,
       isNotNull,
     );
   });
 
-  testWidgets('the roster is editable when nothing is recording',
-      (tester) async {
+  testWidgets('the roster is editable when nothing is recording', (
+    tester,
+  ) async {
     await pump(tester, const SetupScreen());
     await tester.tap(find.text('Players').first);
     await tester.pumpAndSettle();

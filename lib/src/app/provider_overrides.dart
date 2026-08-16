@@ -20,46 +20,57 @@ import '../tracking/tracking_providers.dart';
 /// Shared with the tests rather than duplicated there, so what is verified is
 /// the wiring the app actually runs.
 List<Override> kinetagProviderOverrides() => [
-      // Wire tracking to the court the setup screen is configured for.
-      // `select` keeps the tracking source from being rebuilt every time a
-      // receiver is dragged.
-      trackingCourtProvider.overrideWith(
-        (ref) => ref.watch(setupControllerProvider.select((s) => s.court)),
-      ),
+  // Wire tracking to the court the setup screen is configured for.
+  // `select` keeps the tracking source from being rebuilt every time a
+  // receiver is dragged.
+  trackingCourtProvider.overrideWith(
+    (ref) => ref.watch(setupControllerProvider.select((s) => s.court)),
+  ),
 
-      // Simulate exactly the tags the operator defined in setup.
-      //
-      // The body re-runs on every roster edit, but `SimulatedSquad` compares
-      // equal when the simulated movement is unchanged, and a provider that
-      // recomputes to an equal value notifies nobody. That is what stops a
-      // rename from tearing down the tracking source — possibly mid-recording
-      // — underneath the live view.
-      simulatedSquadProvider.overrideWith((ref) {
-        final roster = ref.watch(rosterControllerProvider);
-        return SimulatedSquad.fromRoster(
-          players: roster.players,
-          tags: roster.tags,
-          assignments: roster.assignments,
-          // The line-up decides which of those tags are fielded and which are
-          // simulated on the bench. It comes from settings rather than from
-          // the roster because it is a property of the game being played, not
-          // of who turned up.
-          fieldPlayersOnCourt: ref.watch(
-            appSettingsProvider.select((s) => s.fieldPlayersOnCourt),
-          ),
-        );
-      }),
-
-      trackingSampleRateProvider.overrideWith(
-        (ref) => ref.watch(appSettingsProvider.select((s) => s.captureRateHz)),
+  // Simulate exactly the tags the operator defined in setup.
+  //
+  // The body re-runs on every roster edit, but `SimulatedSquad` compares
+  // equal when the simulated movement is unchanged, and a provider that
+  // recomputes to an equal value notifies nobody. That is what stops a
+  // rename from tearing down the tracking source — possibly mid-recording
+  // — underneath the live view.
+  simulatedSquadProvider.overrideWith((ref) {
+    final roster = ref.watch(rosterControllerProvider);
+    return SimulatedSquad.fromRoster(
+      players: roster.players,
+      tags: roster.tags,
+      assignments: roster.assignments,
+      // The line-up decides which of those tags are fielded and which are
+      // simulated on the bench. It comes from settings rather than from
+      // the roster because it is a property of the game being played, not
+      // of who turned up.
+      fieldPlayersOnCourt: ref.watch(
+        appSettingsProvider.select((s) => s.fieldPlayersOnCourt),
       ),
+    );
+  }),
 
-      // How often the bench rotates. Like the line-up, this is a property of
-      // the game being played rather than of the roster, so it comes from
-      // settings.
-      trackingSubstitutionIntervalProvider.overrideWith(
-        (ref) => ref.watch(
-          appSettingsProvider.select((s) => s.substitutionInterval),
-        ),
-      ),
-    ];
+  trackingSampleRateProvider.overrideWith(
+    (ref) => ref.watch(appSettingsProvider.select((s) => s.captureRateHz)),
+  ),
+
+  // How often the bench rotates. Like the line-up, this is a property of
+  // the game being played rather than of the roster, so it comes from
+  // settings.
+  trackingSubstitutionIntervalProvider.overrideWith(
+    (ref) =>
+        ref.watch(appSettingsProvider.select((s) => s.substitutionInterval)),
+  ),
+
+  trackingBenchSidelineProvider.overrideWith(
+    (ref) => ref.watch(appSettingsProvider.select((s) => s.benchSideline)),
+  ),
+
+  trackingCrossesPerAttackProvider.overrideWith(
+    (ref) => ref.watch(appSettingsProvider.select((s) => s.crossesPerAttack)),
+  ),
+
+  trackingSubstitutionTimingProvider.overrideWith(
+    (ref) => ref.watch(appSettingsProvider.select((s) => s.substitutionTiming)),
+  ),
+];
