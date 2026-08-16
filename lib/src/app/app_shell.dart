@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../features/home/home_screen.dart';
 import '../features/live/live_screen.dart';
+import '../features/sessions/sessions_screen.dart';
 import '../features/setup/setup_screen.dart';
 
 /// Top-level destinations, in workflow order: Setup -> Record -> Replay.
@@ -45,11 +46,7 @@ class _AppShellState extends State<AppShell> {
         AppDestination.home => HomeScreen(onNavigate: _select),
         AppDestination.setup => const SetupScreen(),
         AppDestination.live => const LiveScreen(),
-        AppDestination.sessions => const _PlaceholderScreen(
-            title: 'Sessions',
-            message: 'Recorded sessions will be listed here.',
-            icon: Icons.folder_outlined,
-          ),
+        AppDestination.sessions => const SessionsScreen(),
       };
 
   @override
@@ -117,35 +114,6 @@ class _KinetagMark extends StatelessWidget {
         Icons.my_location,
         color: Theme.of(context).colorScheme.primary,
         size: 28,
-      ),
-    );
-  }
-}
-
-class _PlaceholderScreen extends StatelessWidget {
-  final String title;
-  final String message;
-  final IconData icon;
-
-  const _PlaceholderScreen({
-    required this.title,
-    required this.message,
-    required this.icon,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 48, color: theme.colorScheme.outline),
-          const SizedBox(height: 12),
-          Text(title, style: theme.textTheme.titleLarge),
-          const SizedBox(height: 4),
-          Text(message, style: theme.textTheme.bodyMedium),
-        ],
       ),
     );
   }

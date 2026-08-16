@@ -7,12 +7,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:kinetag/src/domain/domain.dart';
 import 'package:kinetag/src/features/court/court_canvas.dart';
 import 'package:kinetag/src/features/court/handball_court_layer.dart';
-import 'package:kinetag/src/features/live/live_roster.dart';
-import 'package:kinetag/src/features/live/player_layer.dart';
+import 'package:kinetag/src/features/court/tag_roster.dart';
+import 'package:kinetag/src/features/court/player_layer.dart';
 import 'package:kinetag/src/tracking/simulator/match_simulation.dart';
 import 'package:kinetag/src/tracking/simulator/simulated_squad.dart';
 
-LiveRoster rosterFor(SimulatedSquad squad) => LiveRoster.fromSetup(
+TagRoster rosterFor(SimulatedSquad squad) => TagRoster.fromSetup(
       players: squad.players,
       tags: squad.tags,
       assignments: squad.assignments,
@@ -30,8 +30,8 @@ void main() {
           squad.forTeam(SimulatedTeam.away).first.tagId)!;
 
       expect(home.color, isNot(away.color));
-      expect(home.color, LiveRoster.teamColors[0]);
-      expect(away.color, LiveRoster.teamColors[1]);
+      expect(home.color, TagRoster.teamColors[0]);
+      expect(away.color, TagRoster.teamColors[1]);
     });
 
     test('labels players with their shirt number', () {
@@ -47,14 +47,14 @@ void main() {
     });
 
     test('falls back gracefully for a tag with no player', () {
-      final orphan = LiveRoster.fromSetup(
+      final orphan = TagRoster.fromSetup(
         players: const [],
         assignments: const [],
         tags: const [Tag(id: 't-9', hardwareId: 'HW-4711', name: 'Spare')],
       );
 
       final entry = orphan.entryFor('t-9')!;
-      expect(entry.color, LiveRoster.unassignedColor);
+      expect(entry.color, TagRoster.unassignedColor);
       expect(entry.label, '711');
     });
 
@@ -147,8 +147,8 @@ void main() {
           pixels.getUint8(i + 1),
           pixels.getUint8(i + 2),
         );
-        if (color == LiveRoster.teamColors[0]) homePixels++;
-        if (color == LiveRoster.teamColors[1]) awayPixels++;
+        if (color == TagRoster.teamColors[0]) homePixels++;
+        if (color == TagRoster.teamColors[1]) awayPixels++;
       }
 
       // Six markers a side, ~11 px radius: hundreds of pixels each even

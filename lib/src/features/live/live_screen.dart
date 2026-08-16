@@ -5,11 +5,11 @@ import '../../core/duration_format.dart';
 import '../../tracking/tracking_message.dart';
 import '../court/court_canvas.dart';
 import '../court/handball_court_layer.dart';
+import '../court/player_layer.dart';
 import '../setup/receiver_layer.dart';
 import '../setup/setup_state.dart';
 import 'live_controller.dart';
 import 'live_roster.dart';
-import 'player_layer.dart';
 
 /// Live tracking: the court, the tags moving on it, and recording controls.
 ///

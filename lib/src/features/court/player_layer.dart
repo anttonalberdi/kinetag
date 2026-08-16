@@ -2,8 +2,8 @@ import 'package:flutter/painting.dart';
 
 import '../../core/court_view_transform.dart';
 import '../../domain/position_frame.dart';
-import '../court/court_layer.dart';
-import 'live_roster.dart';
+import 'court_layer.dart';
+import 'tag_roster.dart';
 
 /// Draws the tracked players of a single [PositionFrame].
 ///
@@ -13,13 +13,13 @@ import 'live_roster.dart';
 ///
 /// The layer holds a frame, not a stream. Everything that varies per frame —
 /// which tags exist, what they are called, what colour they take — is
-/// resolved once in [LiveRoster]; painting is then a lookup and a few draw
+/// resolved once in [TagRoster]; painting is then a lookup and a few draw
 /// calls per tag, with no allocation of text layouts on the render path.
 class PlayerLayer extends CourtLayer {
   /// The frame to draw, or null before the first one arrives.
   final PositionFrame? frame;
 
-  final LiveRoster roster;
+  final TagRoster roster;
 
   /// Radius of a player marker, in logical pixels.
   static const double markerRadiusPixels = 11.0;
@@ -37,7 +37,7 @@ class PlayerLayer extends CourtLayer {
     for (final sample in frame.samples) {
       final entry = roster.entryFor(sample.tagId);
       final centre = transform.worldToScreen(Offset(sample.x, sample.y));
-      final color = entry?.color ?? LiveRoster.unassignedColor;
+      final color = entry?.color ?? TagRoster.unassignedColor;
 
       canvas.drawCircle(
         centre,
