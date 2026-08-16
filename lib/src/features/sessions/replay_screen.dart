@@ -8,6 +8,7 @@ import '../court/handball_court_layer.dart';
 import '../court/player_layer.dart';
 import '../court/tag_roster.dart';
 import '../setup/receiver_layer.dart';
+import 'player_metrics_panel.dart';
 import 'replay_controller.dart';
 
 /// Labels and colours for the session being replayed.
@@ -32,6 +33,10 @@ final replayRosterProvider = Provider<TagRoster>((ref) {
   );
 });
 
+/// Below this width the metrics panel moves into a sheet, so the court keeps
+/// the room it needs on a phone or a narrow window.
+const double kMetricsPanelBreakpoint = 1000;
+
 /// Replays one recorded session on the same canvas the live view uses.
 class ReplayScreen extends ConsumerWidget {
   final VoidCallback onBack;
@@ -55,11 +60,30 @@ class ReplayScreen extends ConsumerWidget {
           _ReplayHeader(session: session, onBack: onBack),
           const SizedBox(height: 12),
           Expanded(
-            child: switch ((isLoading, error)) {
-              (true, _) => const Center(child: CircularProgressIndicator()),
-              (_, final String message) => _ReplayMessage(message: message),
-              _ => const _ReplayCourt(),
-            },
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final content = switch ((isLoading, error)) {
+                  (true, _) =>
+                    const Center(child: CircularProgressIndicator()),
+                  (_, final String message) =>
+                    _ReplayMessage(message: message),
+                  _ => const _ReplayCourt(),
+                };
+
+                if (constraints.maxWidth < kMetricsPanelBreakpoint) {
+                  return content;
+                }
+
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(child: content),
+                    const SizedBox(width: 16),
+                    const SizedBox(width: 300, child: PlayerMetricsPanel()),
+                  ],
+                );
+              },
+            ),
           ),
           const SizedBox(height: 12),
           const _ReplayTransport(),
@@ -75,9 +99,27 @@ class _ReplayHeader extends StatelessWidget {
 
   const _ReplayHeader({required this.session, required this.onBack});
 
+  /// On a narrow window the metrics panel has nowhere to live beside the
+  /// court, so it opens as a sheet instead.
+  static void _showMetricsSheet(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SizedBox(
+        height: 420,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          child: const PlayerMetricsPanel(),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isNarrow =
+        MediaQuery.sizeOf(context).width < kMetricsPanelBreakpoint;
 
     return Row(
       children: [
@@ -107,6 +149,12 @@ class _ReplayHeader extends StatelessWidget {
             ],
           ),
         ),
+        if (isNarrow && session != null)
+          IconButton(
+            onPressed: () => _showMetricsSheet(context),
+            icon: const Icon(Icons.insights),
+            tooltip: 'Movement metrics',
+          ),
       ],
     );
   }
