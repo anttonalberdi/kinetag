@@ -346,21 +346,26 @@ class _GameTime extends StatelessWidget {
                 ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
           )
         else
-          TimeBreakdownBar(
-            total: play.possession.measuredDuration,
-            parts: [
+          PlayTimeline(
+            startMicros: play.startMicros,
+            duration: play.sessionDuration,
+            bands: [
               for (final side in TeamSide.values)
-                TimeShare(
+                TimelineBand.fromRuns(
                   label: '${_labelFor(side)} attacking',
-                  duration:
-                      play.possession.teamTimeIn(side, PlayPhase.attacking),
                   color: _colorForSide(side),
+                  runs: [
+                    for (final run in play.possession.runs)
+                      if (run.value == side) run,
+                  ],
                 ),
-              TimeShare(
+              TimelineBand.fromRuns(
                 label: 'Unclear',
-                duration:
-                    play.possession.teamTimeIn(TeamSide.home, PlayPhase.unclear),
                 color: theme.colorScheme.outlineVariant,
+                runs: [
+                  for (final run in play.possession.runs)
+                    if (run.value == null) run,
+                ],
               ),
             ],
           ),

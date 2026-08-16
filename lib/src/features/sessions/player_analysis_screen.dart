@@ -178,13 +178,7 @@ class PlayerAnalysisScreen extends ConsumerWidget {
           team: team,
         ),
         const SizedBox(height: 20),
-        _TimeOnCourt(
-          player: player,
-          sessionDuration: play.sessionDuration,
-          color: color,
-        ),
-        const SizedBox(height: 20),
-        _PhaseSplit(player: player, hasPhases: play.hasPhases, color: color),
+        _ThroughTheSession(player: player, play: play, color: color),
         const SizedBox(height: 20),
         if (isWide)
           Row(
@@ -218,37 +212,42 @@ class PlayerAnalysisScreen extends ConsumerWidget {
   }
 }
 
-/// How much of the session this player actually played.
+/// This player's match, in the order it happened.
 ///
-/// The absolute figure and the share sit next to each other deliberately.
-/// Time on court is the number every other figure on this page should be read
-/// against — a distance is only impressive once you know it was covered in
-/// eight minutes rather than forty — and neither reading alone establishes
-/// that.
-class _TimeOnCourt extends StatelessWidget {
+/// One figure rather than the two stacked percentage bars this replaced.
+/// Those could not distinguish a player substituted once from one rotated
+/// every two minutes, nor a side that defended a single long spell from one
+/// that traded possession twenty times — the proportions are identical and the
+/// matches are not. Read left to right, the attacks, the defences and the
+/// spells on the bench appear interleaved as they actually occurred, and the
+/// totals sit underneath where nothing is lost by their being second.
+class _ThroughTheSession extends StatelessWidget {
   final PlayerPlayMetrics player;
-  final Duration sessionDuration;
+  final SessionPlayMetrics play;
   final Color color;
 
-  const _TimeOnCourt({
+  const _ThroughTheSession({
     required this.player,
-    required this.sessionDuration,
+    required this.play,
     required this.color,
   });
 
   @override
   Widget build(BuildContext context) {
-    final share = player.onCourtShareOf(sessionDuration);
+    final theme = Theme.of(context);
+    final shades = phaseShades(color);
+    final hasPhases = play.hasPhases && player.hasPhaseSplit;
+
+    final unclear = player.runsOf(PlaySplit.unclear);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SectionTitle(
-          title: 'Time on court',
+          title: 'Through the session',
           description: player.stintCount <= 1
-              ? 'One stint.'
-              : '${player.stintCount} stints, so every total below is the sum '
-                  'of them.',
+              ? 'One stint, from the tag alone.'
+              : '${player.stintCount} stints, read from the tag alone.',
         ),
         const SizedBox(height: 10),
         Wrap(
@@ -258,8 +257,9 @@ class _TimeOnCourt extends StatelessWidget {
             StatTile(
               label: 'Played',
               value: formatElapsed(player.onCourtDuration),
-              hint: '${formatShare(share)} of the '
-                  '${formatElapsed(sessionDuration)} session',
+              hint: '${formatShare(
+                player.onCourtShareOf(play.sessionDuration),
+              )} of the ${formatElapsed(play.sessionDuration)} session',
               emphasised: true,
             ),
             StatTile(
@@ -267,7 +267,7 @@ class _TimeOnCourt extends StatelessWidget {
               value: formatElapsed(player.benchDuration),
               hint: player.benchDuration == Duration.zero
                   ? 'Never left the court'
-                  : 'Excluded from every figure below',
+                  : 'Excluded from every other figure',
             ),
             StatTile(
               label: 'Stints',
@@ -278,105 +278,63 @@ class _TimeOnCourt extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 14),
-        TimeBreakdownBar(
-          total: sessionDuration,
-          parts: [
-            TimeShare(
-              label: 'On court',
-              duration: player.onCourtDuration,
-              color: color,
-            ),
-            TimeShare(
+        const SizedBox(height: 16),
+        PlayTimeline(
+          startMicros: play.startMicros,
+          duration: play.sessionDuration,
+          bands: [
+            if (hasPhases) ...[
+              TimelineBand.fromRuns(
+                label: 'Attacking',
+                color: shades.attacking,
+                runs: player.runsOf(PlaySplit.attacking),
+              ),
+              TimelineBand.fromRuns(
+                label: 'Defending',
+                color: shades.defending,
+                runs: player.runsOf(PlaySplit.defending),
+              ),
+              if (unclear.isNotEmpty)
+                TimelineBand.fromRuns(
+                  label: 'Unclear',
+                  color: theme.colorScheme.outlineVariant,
+                  runs: unclear,
+                ),
+            ] else
+              TimelineBand.fromRuns(
+                label: 'On court',
+                color: shades.attacking,
+                runs: player.runsOf(PlaySplit.onCourt),
+              ),
+            TimelineBand.fromRuns(
               label: 'Bench',
-              duration: player.benchDuration,
-              color: color.withValues(alpha: 0.35),
+              color: kBenchColor,
+              runs: player.runsOf(PlaySplit.bench),
             ),
           ],
         ),
-      ],
-    );
-  }
-}
-
-/// This player's playing time divided between attacking and defending, and
-/// what they did in each.
-///
-/// Side by side rather than as a split selector, because the interesting thing
-/// about the two is the difference: a back who covers half again as much
-/// ground defending as attacking is telling you something a coach can act on,
-/// and that comparison disappears if the reader has to toggle between them.
-class _PhaseSplit extends StatelessWidget {
-  final PlayerPlayMetrics player;
-  final bool hasPhases;
-  final Color color;
-
-  const _PhaseSplit({
-    required this.player,
-    required this.hasPhases,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    if (!hasPhases || !player.hasPhaseSplit) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SectionTitle(title: 'Attack and defence'),
-          const SizedBox(height: 6),
+        if (!hasPhases) ...[
+          const SizedBox(height: 10),
           Text(
             player.side == null
-                ? 'This player has no side on the roster, so there is no end '
-                    'for them to be attacking.'
-                : 'Which way play was going could not be established: it is '
-                    'read from how far each goalkeeper stands off their own '
-                    'line, and this session has no tracked goalkeeper.',
+                ? 'Attacking and defending are not separated here: this player '
+                    'has no side on the roster, so there is no end for them to '
+                    'be attacking.'
+                : 'Attacking and defending are not separated here: which way '
+                    'play was going is read from how far each goalkeeper '
+                    'stands off their own line, and this session has no '
+                    'tracked goalkeeper.',
             style: theme.textTheme.bodySmall
                 ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
           ),
         ],
-      );
-    }
-
-    final attacking = player.forSplit(PlaySplit.attacking);
-    final defending = player.forSplit(PlaySplit.defending);
-    final unclear = player.forSplit(PlaySplit.unclear);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SectionTitle(
-          title: 'Attack and defence',
-          description: 'Their playing time divided by which way their team '
-              'was playing.',
-        ),
-        const SizedBox(height: 10),
-        TimeBreakdownBar(
-          total: player.onCourtDuration,
-          parts: [
-            TimeShare(
-              label: 'Attacking',
-              duration: attacking.trackedDuration,
-              color: color,
-            ),
-            TimeShare(
-              label: 'Defending',
-              duration: defending.trackedDuration,
-              color: color.withValues(alpha: 0.45),
-            ),
-            if (unclear.trackedDuration > Duration.zero)
-              TimeShare(
-                label: 'Unclear',
-                duration: unclear.trackedDuration,
-                color: theme.colorScheme.outlineVariant,
-              ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        _PhaseTable(attacking: attacking, defending: defending),
+        if (hasPhases) ...[
+          const SizedBox(height: 16),
+          _PhaseTable(
+            attacking: player.forSplit(PlaySplit.attacking),
+            defending: player.forSplit(PlaySplit.defending),
+          ),
+        ],
       ],
     );
   }

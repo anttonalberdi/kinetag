@@ -47,6 +47,18 @@ enum PlaySplit {
   /// reported as time rather than as movement, and the other two exist for the
   /// arithmetic rather than for a coach.
   static const List<PlaySplit> selectable = [onCourt, attacking, defending];
+
+  /// The splits that tile a recording without overlapping.
+  ///
+  /// [all] and [onCourt] are containers for the others, so a partition is made
+  /// of the four leaves. This is the vocabulary a timeline is drawn in: at any
+  /// instant a tracked player is in exactly one of them.
+  static const List<PlaySplit> partition = [
+    attacking,
+    defending,
+    unclear,
+    bench,
+  ];
 }
 
 /// One player's recording, split by what they were doing at the time.
@@ -76,12 +88,41 @@ class PlayerPlayMetrics {
   /// different intervals.
   final Map<PlaySplit, PlayerTrackMetrics> bySplit;
 
+  /// What this player was doing, moment by moment, in time order.
+  ///
+  /// The intervals the split metrics were measured over, kept rather than
+  /// discarded once they had been summed. Totals answer *how much*; only the
+  /// sequence answers *when*, and the two questions are not interchangeable —
+  /// "twelve minutes defending" reads identically whether it was one long
+  /// spell or fourteen short ones, and a coach cares which.
+  ///
+  /// Uses only [PlaySplit.partition], so the runs tile the player's tracked
+  /// span without overlapping.
+  final List<TimedRun<PlaySplit>> timeline;
+
   const PlayerPlayMetrics({
     required this.tagId,
     required this.side,
     required this.presence,
     required this.bySplit,
+    this.timeline = const [],
   });
+
+  /// The stretches spent in [split], for drawing one band of a timeline.
+  ///
+  /// [PlaySplit.onCourt] and [PlaySplit.all] are containers rather than
+  /// states, so they gather their constituent leaves.
+  List<TimedRun<PlaySplit>> runsOf(PlaySplit split) => switch (split) {
+        PlaySplit.all => timeline,
+        PlaySplit.onCourt => [
+            for (final run in timeline)
+              if (run.value != PlaySplit.bench) run,
+          ],
+        _ => [
+            for (final run in timeline)
+              if (run.value == split) run,
+          ],
+      };
 
   PlayerTrackMetrics forSplit(PlaySplit split) =>
       bySplit[split] ?? PlayerTrackMetrics.empty(tagId);
@@ -159,9 +200,17 @@ class SessionPlayMetrics {
   /// nobody's tag was reporting. A recording still in progress measures its
   /// duration against the clock, which is not a figure an analysis can be
   /// divided by twice and get the same answer, so that case falls back to the
-  /// longest span any tag was tracked for — as does a session that never
-  /// recorded when it started.
+  /// span the tags themselves cover — as does a session that never recorded
+  /// when it started.
   final Duration sessionDuration;
+
+  /// The instant [sessionDuration] is measured from.
+  ///
+  /// Carried alongside the length because a duration alone cannot place
+  /// anything on an axis. Every player's timeline is drawn against this one
+  /// origin, which is what lets two of them be read one above the other: the
+  /// same horizontal position is the same moment of the match for everybody.
+  final int startMicros;
 
   final AnalyticsThresholds thresholds;
   final PlayThresholds playThresholds;
@@ -171,6 +220,7 @@ class SessionPlayMetrics {
     required this.presence,
     required this.possession,
     required this.sessionDuration,
+    this.startMicros = 0,
     this.thresholds = AnalyticsThresholds.defaults,
     this.playThresholds = PlayThresholds.defaults,
   });
@@ -181,6 +231,9 @@ class SessionPlayMetrics {
         possession: PossessionTimeline.unavailable,
         sessionDuration: Duration.zero,
       );
+
+  /// The instant the session's axis ends.
+  int get endMicros => startMicros + sessionDuration.inMicroseconds;
 
   /// Segments [samples] and measures each player over every split.
   ///
@@ -208,7 +261,26 @@ class SessionPlayMetrics {
       thresholds: playThresholds,
     );
 
-    var longestTracked = Duration.zero;
+    // The span the tags themselves cover, for a session that cannot say.
+    var firstMicros = 0;
+    var lastMicros = 0;
+    var seen = false;
+    for (final track in tracks.values) {
+      if (track.isEmpty) continue;
+      if (!seen) {
+        firstMicros = track.first.timestampMicros;
+        lastMicros = track.last.timestampMicros;
+        seen = true;
+        continue;
+      }
+      if (track.first.timestampMicros < firstMicros) {
+        firstMicros = track.first.timestampMicros;
+      }
+      if (track.last.timestampMicros > lastMicros) {
+        lastMicros = track.last.timestampMicros;
+      }
+    }
+
     final byTagId = <String, PlayerPlayMetrics>{};
 
     for (final entry in tracks.entries) {
@@ -216,10 +288,6 @@ class SessionPlayMetrics {
       final track = entry.value;
       final playerPresence = presence.forTag(tagId);
       final side = session.playerForTag(tagId)?.side;
-
-      if (playerPresence.trackedDuration > longestTracked) {
-        longestTracked = playerPresence.trackedDuration;
-      }
 
       final onCourt = _rangesOf(
         playerPresence.stints,
@@ -273,19 +341,45 @@ class SessionPlayMetrics {
           PlaySplit.defending: measure(defending),
           PlaySplit.unclear: measure(unclear),
         },
+        timeline: _timelineOf({
+          PlaySplit.attacking: attacking,
+          PlaySplit.defending: defending,
+          PlaySplit.unclear: unclear,
+          PlaySplit.bench: bench,
+        }),
       );
     }
+
+    // A finished recording knows its own span; anything else is measured from
+    // the samples, which is also the only origin an axis can be drawn from.
+    final closed = session.startedAt != null && session.stoppedAt != null;
+    final trackedSpan = Duration(microseconds: lastMicros - firstMicros);
 
     return SessionPlayMetrics(
       byTagId: byTagId,
       presence: presence,
       possession: possession,
-      sessionDuration: session.stoppedAt == null
-          ? longestTracked
-          : (session.duration ?? longestTracked),
+      sessionDuration: closed ? (session.duration ?? trackedSpan) : trackedSpan,
+      startMicros:
+          closed ? session.startedAt!.microsecondsSinceEpoch : firstMicros,
       thresholds: metrics.thresholds,
       playThresholds: playThresholds,
     );
+  }
+
+  /// Interleaves the per-state ranges into one time-ordered partition.
+  ///
+  /// The states are disjoint by construction, so ordering them by start is
+  /// enough to recover the sequence they happened in.
+  static List<TimedRun<PlaySplit>> _timelineOf(
+    Map<PlaySplit, List<(int, int)>> byState,
+  ) {
+    final runs = <TimedRun<PlaySplit>>[
+      for (final entry in byState.entries)
+        for (final (start, end) in entry.value)
+          TimedRun(startMicros: start, endMicros: end, value: entry.key),
+    ]..sort((a, b) => a.startMicros.compareTo(b.startMicros));
+    return runs;
   }
 
   PlayerPlayMetrics? forTag(String tagId) => byTagId[tagId];

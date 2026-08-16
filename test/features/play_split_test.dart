@@ -249,7 +249,7 @@ void main() {
     await tester.tap(row);
     await tester.pumpAndSettle();
 
-    await tester.scrollUntilVisible(find.text('Time on court'), 200);
+    await tester.scrollUntilVisible(find.text('Through the session'), 200);
     await tester.pumpAndSettle();
 
     // Eighty of the hundred and twenty seconds, both ways round.
@@ -258,10 +258,61 @@ void main() {
     expect(tileValue(tester, 'On the bench'), '00:40');
     expect(tileValue(tester, 'Stints'), '2');
 
-    await tester.scrollUntilVisible(find.text('Attack and defence'), 200);
-    await tester.pumpAndSettle();
     expect(find.text('ATTACKING'), findsOneWidget);
     expect(find.text('DEFENDING'), findsOneWidget);
+  });
+
+  testWidgets('the player timeline shows the match in the order it happened',
+      (tester) async {
+    await seedMatch(repository);
+    await pumpAnalysis(tester);
+
+    await tester.scrollUntilVisible(find.byType(DataTable), 200);
+    final row = find.descendant(
+      of: find.byType(DataTable),
+      matching: find.text('Rotating Back'),
+    );
+    await tester.ensureVisible(row);
+    await tester.pumpAndSettle();
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(find.byType(PlayTimeline), 200);
+    await tester.pumpAndSettle();
+
+    final timeline = tester.widget<PlayTimeline>(find.byType(PlayTimeline));
+    final bands = {for (final band in timeline.bands) band.label: band};
+
+    expect(bands.keys, containsAll(['Attacking', 'Defending', 'Bench']));
+
+    // Drawn against the session's own clock, so two players' timelines line up.
+    expect(timeline.duration, const Duration(minutes: 2));
+
+    // Bench time is black, and is the one spell it actually was.
+    expect(bands['Bench']!.color, kBenchColor);
+    expect(bands['Bench']!.total, const Duration(seconds: 40));
+
+    // Attacking and defending are shades of one team colour, not two colours.
+    // A few degrees of drift comes from the round trip through 8-bit RGB; two
+    // genuinely different colours would be tens of degrees apart.
+    expect(bands['Attacking']!.color, isNot(bands['Defending']!.color));
+    expect(
+      HSLColor.fromColor(bands['Attacking']!.color).hue,
+      closeTo(HSLColor.fromColor(bands['Defending']!.color).hue, 6.0),
+    );
+
+    // The point of a timeline rather than a bar: possession changed hands
+    // repeatedly, and each turnover is its own stretch.
+    expect(bands['Attacking']!.spans.length, greaterThan(1));
+    expect(bands['Defending']!.spans.length, greaterThan(1));
+
+    // Every stretch sits inside the axis and runs forwards.
+    for (final band in timeline.bands) {
+      for (final (start, end) in band.spans) {
+        expect(end, greaterThan(start));
+        expect(start, greaterThanOrEqualTo(timeline.startMicros));
+      }
+    }
   });
 
   testWidgets('a session with no goalkeeper says so instead of guessing',
