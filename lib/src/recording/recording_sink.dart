@@ -15,6 +15,13 @@ abstract class RecordingSink {
   /// Samples accepted since [begin].
   int get sampleCount;
 
+  /// The most recent write failure, or null if everything has landed.
+  ///
+  /// Part of the contract because writes are asynchronous and batched: by the
+  /// time a disk error happens, the [add] call that caused it has long
+  /// returned, so there is nowhere else for the failure to surface.
+  Object? get lastWriteError;
+
   /// Opens a recording for [session], which must already carry its frozen
   /// setup snapshot.
   Future<void> begin(Session session);
@@ -53,6 +60,10 @@ class InMemoryRecordingSink implements RecordingSink {
 
   @override
   int get sampleCount => _sampleCount;
+
+  /// Nothing to fail: memory writes cannot half-succeed.
+  @override
+  Object? get lastWriteError => null;
 
   /// Frames buffered for the recording currently in progress.
   List<PositionFrame> get pendingFrames => List.unmodifiable(_frames);

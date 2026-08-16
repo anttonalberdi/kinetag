@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../domain/domain.dart';
 import '../../recording/recording_providers.dart';
+import '../../storage/storage_providers.dart';
 import '../../tracking/tracking_message.dart';
 import '../../tracking/tracking_providers.dart';
 import '../setup/setup_state.dart';
@@ -170,13 +171,26 @@ class LiveController extends Notifier<LiveState> {
   Future<Session?> stopRecording() async {
     if (!state.isRecording) return null;
 
-    final completed = await ref.read(recordingSinkProvider).finish();
+    final sink = ref.read(recordingSinkProvider);
+    final completed = await sink.finish();
     _recordingStartMicros = null;
+
+    // Storage refreshes only when a recording ends, so the session browser
+    // never polls.
+    ref.invalidate(sessionListProvider);
+
+    // Writes are batched and asynchronous, so a storage failure can only be
+    // reported after the fact — but it must be reported: the completed
+    // session's count comes from what actually reached the database.
+    final writeError = sink.lastWriteError;
 
     state = state.copyWith(
       clearRecording: true,
       lastCompletedSession: completed,
       recordedSampleCount: completed.sampleCount,
+      errorMessage:
+          writeError == null ? null : 'Storage error: $writeError',
+      clearError: writeError == null,
     );
     return completed;
   }
