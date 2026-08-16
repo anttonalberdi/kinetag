@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:meta/meta.dart';
 
 import '../domain/domain.dart';
+import 'analytics_thresholds.dart';
 
 /// Movement metrics for one tag's trajectory.
 ///
@@ -34,8 +35,8 @@ class PlayerTrackMetrics {
   final int sampleCount;
 
   /// Steps rejected as physically impossible — see
-  /// [SessionMetrics.maxPlausibleSpeedMps]. A non-zero count on real hardware
-  /// means positioning noise, not a fast player.
+  /// [AnalyticsThresholds.maxPlausibleSpeedMps]. A non-zero count on real
+  /// hardware means positioning noise, not a fast player.
   final int discardedSteps;
 
   /// Windowed speed series, as parallel arrays in ascending time order.
@@ -96,44 +97,50 @@ class PlayerTrackMetrics {
 class SessionMetrics {
   final Map<String, PlayerTrackMetrics> byTagId;
 
-  const SessionMetrics(this.byTagId);
-
-  /// Speeds above this are treated as positioning noise rather than
-  /// movement, and the step is dropped.
+  /// The noise-rejection settings these figures were computed under.
   ///
-  /// Elite sprinters peak near 12 m/s and handball players well below that,
-  /// so a step implying more is a bad fix, not a fast player. Dropping such
-  /// steps matters most for *distance*: a single 30 m glitch and back adds
-  /// 60 m of phantom running to a player's total.
-  static const double maxPlausibleSpeedMps = 12.0;
+  /// Carried with the result rather than left implicit, so a reader can tell
+  /// whether two sets of numbers are comparable.
+  final AnalyticsThresholds thresholds;
 
-  /// Speeds are measured over at least this much time.
-  ///
-  /// Consecutive samples 50 ms apart are separated by centimetres, so
-  /// position error of a few centimetres — routine for UWB — would dominate
-  /// a sample-to-sample speed and make the maximum meaningless. Measuring
-  /// over a window trades a little peak sharpness for a number that reflects
-  /// the player rather than the noise.
-  static const Duration speedWindow = Duration(milliseconds: 200);
+  const SessionMetrics(
+    this.byTagId, {
+    this.thresholds = AnalyticsThresholds.defaults,
+  });
 
   /// Computes metrics from a flat, time-ordered list of samples.
-  factory SessionMetrics.fromSamples(Iterable<PositionSample> samples) {
+  factory SessionMetrics.fromSamples(
+    Iterable<PositionSample> samples, {
+    AnalyticsThresholds thresholds = AnalyticsThresholds.defaults,
+  }) {
     final byTag = <String, List<PositionSample>>{};
     for (final sample in samples) {
+      // Low-confidence fixes are dropped before anything is derived from
+      // them: a bad position is worse than a missing one, because the gap it
+      // leaves is bridged by the next accepted sample while the bad fix would
+      // be integrated into the distance total.
+      if (sample.confidence < thresholds.minConfidence) continue;
       (byTag[sample.tagId] ??= []).add(sample);
     }
 
-    return SessionMetrics({
-      for (final entry in byTag.entries)
-        entry.key: _metricsForTrack(entry.key, entry.value),
-    });
+    return SessionMetrics(
+      {
+        for (final entry in byTag.entries)
+          entry.key: _metricsForTrack(entry.key, entry.value, thresholds),
+      },
+      thresholds: thresholds,
+    );
   }
 
   /// Computes metrics from frames, the shape replay already holds.
-  factory SessionMetrics.fromFrames(Iterable<PositionFrame> frames) =>
-      SessionMetrics.fromSamples([
-        for (final frame in frames) ...frame.samples,
-      ]);
+  factory SessionMetrics.fromFrames(
+    Iterable<PositionFrame> frames, {
+    AnalyticsThresholds thresholds = AnalyticsThresholds.defaults,
+  }) =>
+      SessionMetrics.fromSamples(
+        [for (final frame in frames) ...frame.samples],
+        thresholds: thresholds,
+      );
 
   PlayerTrackMetrics? forTag(String tagId) => byTagId[tagId];
 
@@ -152,8 +159,12 @@ class SessionMetrics {
   static PlayerTrackMetrics _metricsForTrack(
     String tagId,
     List<PositionSample> track,
+    AnalyticsThresholds thresholds,
   ) {
     track.sort((a, b) => a.timestampMicros.compareTo(b.timestampMicros));
+
+    final maxPlausibleSpeedMps = thresholds.maxPlausibleSpeedMps;
+    final speedWindowMicros = thresholds.speedWindow.inMicroseconds;
 
     var distance = 0.0;
     var discarded = 0;
@@ -178,8 +189,8 @@ class SessionMetrics {
     }
 
     // Windowed speeds: straight-line displacement from the newest sample at
-    // least [speedWindow] old. `window` only ever moves forward, so the pass
-    // is linear rather than quadratic.
+    // least one speed window old. `window` only ever moves forward, so the
+    // pass is linear rather than quadratic.
     //
     // Samples in the first window have no full window behind them and are
     // skipped rather than measured over a shorter one — a short baseline is
@@ -192,13 +203,13 @@ class SessionMetrics {
     for (var i = 1; i < track.length; i++) {
       while (window + 1 < i &&
           track[i].timestampMicros - track[window + 1].timestampMicros >=
-              speedWindow.inMicroseconds) {
+              speedWindowMicros) {
         window++;
       }
 
       final dtMicros =
           track[i].timestampMicros - track[window].timestampMicros;
-      if (dtMicros < speedWindow.inMicroseconds) continue;
+      if (dtMicros < speedWindowMicros) continue;
 
       final speed = track[window].distanceTo(track[i]) / (dtMicros / 1e6);
       if (speed > maxPlausibleSpeedMps) continue;

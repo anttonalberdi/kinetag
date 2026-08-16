@@ -13,8 +13,19 @@ Session buildSession() => Session(
       tags: const [
         Tag(id: 't-1', hardwareId: 'HW-1', name: 'Tag 1'),
       ],
+      teams: const [
+        Team(side: TeamSide.home, name: 'Ajax', colorValue: 0xFF67D68A),
+        Team(side: TeamSide.away, name: 'Feyenoord', colorValue: 0xFFFF6B6B),
+      ],
       players: const [
-        Player(id: 'p-1', name: 'Ana Ruiz', number: 7),
+        Player(
+          id: 'p-1',
+          name: 'Ana Ruiz',
+          number: 7,
+          team: 'Ajax',
+          side: TeamSide.home,
+          role: PlayerRole.pivot,
+        ),
       ],
       tagAssignments: const [
         TagAssignment(
@@ -63,12 +74,37 @@ void main() {
       expect(restored.tags, session.tags);
       expect(restored.players, session.players);
       expect(restored.tagAssignments, session.tagAssignments);
+      expect(restored.teams, session.teams);
+      expect(restored.players.first.role, PlayerRole.pivot);
+      expect(restored.players.first.side, TeamSide.home);
       expect(restored.positioningAlgorithmVersion,
           session.positioningAlgorithmVersion);
     });
 
     test('records which positioning algorithm produced the data', () {
       expect(buildSession().positioningAlgorithmVersion, 'simulator-v1');
+    });
+
+    test('freezes the teams, so a later recolour cannot rewrite history', () {
+      // Team colour is a coach's choice, and a recording must replay in the
+      // colours it was captured with — the same rule as receiver geometry.
+      final session = buildSession();
+      final recoloured = session.teams.first.copyWith(colorValue: 0xFF000000);
+
+      expect(session.teamFor(TeamSide.home)!.colorValue, 0xFF67D68A);
+      expect(session.teamFor(TeamSide.home), isNot(recoloured));
+      expect(session.teamFor(TeamSide.away)!.name, 'Feyenoord');
+    });
+
+    test('reads back a session recorded before teams existed', () {
+      // Older rows have no `teams` key at all; they must still load.
+      final json = Map<String, dynamic>.of(buildSession().toJson())
+        ..remove('teams');
+      final restored = Session.fromJson(json);
+
+      expect(restored.teams, isEmpty);
+      expect(restored.teamFor(TeamSide.home), isNull);
+      expect(restored.players, hasLength(1));
     });
   });
 

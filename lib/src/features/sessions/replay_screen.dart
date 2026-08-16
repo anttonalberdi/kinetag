@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/court_view_transform.dart';
 import '../../core/duration_format.dart';
 import '../../domain/domain.dart';
 import '../court/court_canvas.dart';
@@ -8,6 +9,7 @@ import '../court/handball_court_layer.dart';
 import '../court/player_layer.dart';
 import '../court/tag_roster.dart';
 import '../setup/receiver_layer.dart';
+import 'analysis_navigation.dart';
 import 'player_metrics_panel.dart';
 import 'replay_controller.dart';
 
@@ -30,6 +32,7 @@ final replayRosterProvider = Provider<TagRoster>((ref) {
     players: session.players,
     tags: session.tags,
     assignments: session.tagAssignments,
+    teams: session.teams,
   );
 });
 
@@ -93,33 +96,15 @@ class ReplayScreen extends ConsumerWidget {
   }
 }
 
-class _ReplayHeader extends StatelessWidget {
+class _ReplayHeader extends ConsumerWidget {
   final Session? session;
   final VoidCallback onBack;
 
   const _ReplayHeader({required this.session, required this.onBack});
 
-  /// On a narrow window the metrics panel has nowhere to live beside the
-  /// court, so it opens as a sheet instead.
-  static void _showMetricsSheet(BuildContext context) {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) => SizedBox(
-        height: 420,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-          child: const PlayerMetricsPanel(),
-        ),
-      ),
-    );
-  }
-
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final isNarrow =
-        MediaQuery.sizeOf(context).width < kMetricsPanelBreakpoint;
 
     return Row(
       children: [
@@ -149,11 +134,11 @@ class _ReplayHeader extends StatelessWidget {
             ],
           ),
         ),
-        if (isNarrow && session != null)
-          IconButton(
-            onPressed: () => _showMetricsSheet(context),
-            icon: const Icon(Icons.insights),
-            tooltip: 'Movement metrics',
+        if (session != null)
+          FilledButton.tonalIcon(
+            onPressed: ref.read(sessionViewProvider.notifier).showTeamAnalysis,
+            icon: const Icon(Icons.insights, size: 18),
+            label: const Text('Analysis'),
           ),
       ],
     );
@@ -199,6 +184,12 @@ class _ReplayCourt extends ConsumerWidget {
       borderRadius: BorderRadius.circular(12),
       child: CourtCanvas(
         court: court,
+        onWorldTapDown: (world, transform) {
+          final tagId = _tagNear(world, frame, transform);
+          if (tagId != null) {
+            ref.read(sessionViewProvider.notifier).showPlayer(tagId);
+          }
+        },
         layers: [
           const CourtSurroundLayer(),
           HandballCourtLayer(court: court),
@@ -207,6 +198,34 @@ class _ReplayCourt extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  /// The tag whose marker was hit, or null for a tap on empty floor.
+  ///
+  /// The tolerance is expressed in pixels and converted to metres, because a
+  /// fingertip is a fixed size on screen while a metre is not. Closest wins,
+  /// so two players standing on top of each other still resolve to the one
+  /// actually pointed at.
+  static String? _tagNear(
+    Offset world,
+    PositionFrame? frame,
+    CourtViewTransform transform,
+  ) {
+    if (frame == null) return null;
+
+    final tolerance =
+        transform.pixelsToMetres(PlayerLayer.markerRadiusPixels + 4);
+    String? best;
+    var bestDistance = double.infinity;
+
+    for (final sample in frame.samples) {
+      final distance = (Offset(sample.x, sample.y) - world).distance;
+      if (distance <= tolerance && distance < bestDistance) {
+        best = sample.tagId;
+        bestDistance = distance;
+      }
+    }
+    return best;
   }
 }
 

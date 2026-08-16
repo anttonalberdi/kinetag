@@ -9,25 +9,34 @@ import 'package:kinetag/src/features/court/court_canvas.dart';
 import 'package:kinetag/src/features/court/handball_court_layer.dart';
 import 'package:kinetag/src/features/court/tag_roster.dart';
 import 'package:kinetag/src/features/court/player_layer.dart';
+import 'package:kinetag/src/features/setup/roster_state.dart';
 import 'package:kinetag/src/tracking/simulator/match_simulation.dart';
 import 'package:kinetag/src/tracking/simulator/simulated_squad.dart';
 
-TagRoster rosterFor(SimulatedSquad squad) => TagRoster.fromSetup(
-      players: squad.players,
-      tags: squad.tags,
-      assignments: squad.assignments,
+TagRoster rosterFor(RosterState setup) => TagRoster.fromSetup(
+      players: setup.players,
+      tags: setup.tags,
+      assignments: setup.assignments,
+      teams: setup.teams,
     );
 
 void main() {
-  final squad = SimulatedSquad.handballTeams();
-  final roster = rosterFor(squad);
+  // The on-court appearance is built from the roster entered in setup, and
+  // the simulator emits positions for the tags that roster declares.
+  final setup = RosterState.defaults();
+  final roster = rosterFor(setup);
+  final squad = SimulatedSquad.fromRoster(
+    players: setup.players,
+    tags: setup.tags,
+    assignments: setup.assignments,
+  );
 
   group('roster', () {
     test('gives each team its own colour', () {
-      final home = roster.entryFor(
-          squad.forTeam(SimulatedTeam.home).first.tagId)!;
-      final away = roster.entryFor(
-          squad.forTeam(SimulatedTeam.away).first.tagId)!;
+      final home =
+          roster.entryFor(squad.forSide(TeamSide.home).first.tagId)!;
+      final away =
+          roster.entryFor(squad.forSide(TeamSide.away).first.tagId)!;
 
       expect(home.color, isNot(away.color));
       expect(home.color, TagRoster.teamColors[0]);
@@ -36,12 +45,10 @@ void main() {
 
     test('labels players with their shirt number', () {
       final entry = roster.entryFor(
-        squad.participants
-            .firstWhere((p) => p.role == PlayerRole.pivot)
-            .tagId,
+        squad.participants.firstWhere((p) => p.role == PlayerRole.pivot).tagId,
       )!;
 
-      expect(entry.label, '${PlayerRole.pivot.shirtNumber}');
+      expect(entry.label, '${PlayerRole.pivot.defaultShirtNumber}');
       expect(entry.labelPainter.width, greaterThan(0),
           reason: 'labels are laid out once, off the render path');
     });
@@ -60,6 +67,53 @@ void main() {
 
     test('returns null for a tag nobody registered', () {
       expect(roster.entryFor('unknown-tag'), isNull);
+    });
+  });
+
+  group('team colours', () {
+    test('follow the colour chosen for the team', () {
+      final recoloured = setup.copyWith(
+        teams: [
+          setup.teams.first.copyWith(colorValue: Team.colorPalette[5]),
+          ...setup.teams.skip(1),
+        ],
+      );
+      final built = rosterFor(recoloured);
+      final home = recoloured.forSide(TeamSide.home).first;
+
+      expect(built.entryFor(home.tagId)!.color,
+          const Color(0xFFFF6B6B));
+      expect(built.entryFor(home.tagId)!.color,
+          Color(Team.colorPalette[5]));
+    });
+
+    test('follow a team rename', () {
+      final renamed = setup.copyWith(
+        teams: [
+          setup.teams.first.copyWith(name: 'Ajax'),
+          ...setup.teams.skip(1),
+        ],
+      );
+      final home = renamed.forSide(TeamSide.home).first;
+
+      expect(rosterFor(renamed).entryFor(home.tagId)!.team, 'Ajax');
+    });
+
+    test('fall back to appearance order for a session with no teams', () {
+      // Sessions recorded before teams were user-defined carry none. They must
+      // still replay in two distinguishable colours.
+      final legacy = TagRoster.fromSetup(
+        players: setup.players,
+        tags: setup.tags,
+        assignments: setup.assignments,
+      );
+
+      final home = setup.forSide(TeamSide.home).first;
+      final away = setup.forSide(TeamSide.away).first;
+      expect(legacy.entryFor(home.tagId)!.color, TagRoster.teamColors[0]);
+      expect(legacy.entryFor(away.tagId)!.color, TagRoster.teamColors[1]);
+      expect(legacy.entryFor(home.tagId)!.color,
+          isNot(legacy.entryFor(away.tagId)!.color));
     });
   });
 
@@ -85,7 +139,7 @@ void main() {
 
     test('repaints when the roster is replaced', () {
       expect(
-        PlayerLayer(frame: frameA, roster: rosterFor(squad))
+        PlayerLayer(frame: frameA, roster: rosterFor(setup))
             .shouldRepaint(PlayerLayer(frame: frameA, roster: roster)),
         isTrue,
       );

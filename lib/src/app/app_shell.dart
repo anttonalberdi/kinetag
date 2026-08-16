@@ -3,15 +3,18 @@ import 'package:flutter/material.dart';
 import '../features/home/home_screen.dart';
 import '../features/live/live_screen.dart';
 import '../features/sessions/sessions_screen.dart';
+import '../features/settings/settings_screen.dart';
 import '../features/setup/setup_screen.dart';
 
-/// Top-level destinations, in workflow order: Setup -> Record -> Replay.
+/// Top-level destinations, in workflow order: Setup -> Record -> Replay, with
+/// Settings last because it is configured once and then left alone.
 enum AppDestination {
   home('Home', Icons.home_outlined, Icons.home),
   setup('Setup', Icons.settings_input_antenna_outlined,
       Icons.settings_input_antenna),
   live('Live', Icons.sensors_outlined, Icons.sensors),
-  sessions('Sessions', Icons.folder_outlined, Icons.folder);
+  sessions('Sessions', Icons.folder_outlined, Icons.folder),
+  settings('Settings', Icons.tune_outlined, Icons.tune);
 
   const AppDestination(this.label, this.icon, this.selectedIcon);
 
@@ -47,6 +50,7 @@ class _AppShellState extends State<AppShell> {
         AppDestination.setup => const SetupScreen(),
         AppDestination.live => const LiveScreen(),
         AppDestination.sessions => const SessionsScreen(),
+        AppDestination.settings => const SettingsScreen(),
       };
 
   @override

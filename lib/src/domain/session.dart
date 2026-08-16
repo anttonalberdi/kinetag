@@ -5,6 +5,8 @@ import 'player.dart';
 import 'receiver.dart';
 import 'tag.dart';
 import 'tag_assignment.dart';
+import 'team.dart';
+import 'team_side.dart';
 
 enum SessionStatus {
   /// Created but never started.
@@ -29,7 +31,7 @@ enum SessionStatus {
 ///
 /// ## Why the setup is snapshotted
 ///
-/// [court], [receivers], [tags], [players] and [tagAssignments] are stored
+/// [court], [receivers], [teams], [tags], [players] and [tagAssignments] are stored
 /// **by value**, not by reference to the live setup. Recorded trajectories are
 /// only interpretable against the anchor geometry that produced them: if a
 /// receiver is later moved 3 m in the setup screen, a historical session's
@@ -52,6 +54,7 @@ class Session {
   /// Frozen setup snapshot.
   final Court court;
   final List<Receiver> receivers;
+  final List<Team> teams;
   final List<Tag> tags;
   final List<Player> players;
   final List<TagAssignment> tagAssignments;
@@ -79,6 +82,7 @@ class Session {
     required this.createdAt,
     required this.court,
     this.receivers = const [],
+    this.teams = const [],
     this.tags = const [],
     this.players = const [],
     this.tagAssignments = const [],
@@ -115,6 +119,15 @@ class Session {
     return null;
   }
 
+  /// The team defending [side] in this session, or null when the session was
+  /// recorded before teams were snapshotted.
+  Team? teamFor(TeamSide side) {
+    for (final team in teams) {
+      if (team.side == side) return team;
+    }
+    return null;
+  }
+
   /// All assignments belonging to [playerId] — up to two once both shoes are
   /// tagged.
   List<TagAssignment> assignmentsForPlayer(String playerId) =>
@@ -126,6 +139,7 @@ class Session {
     DateTime? createdAt,
     Court? court,
     List<Receiver>? receivers,
+    List<Team>? teams,
     List<Tag>? tags,
     List<Player>? players,
     List<TagAssignment>? tagAssignments,
@@ -141,6 +155,7 @@ class Session {
         createdAt: createdAt ?? this.createdAt,
         court: court ?? this.court,
         receivers: receivers ?? this.receivers,
+        teams: teams ?? this.teams,
         tags: tags ?? this.tags,
         players: players ?? this.players,
         tagAssignments: tagAssignments ?? this.tagAssignments,
@@ -161,6 +176,7 @@ class Session {
         'createdAt': createdAt.toUtc().toIso8601String(),
         'court': court.toJson(),
         'receivers': receivers.map((r) => r.toJson()).toList(),
+        'teams': teams.map((t) => t.toJson()).toList(),
         'tags': tags.map((t) => t.toJson()).toList(),
         'players': players.map((p) => p.toJson()).toList(),
         'tagAssignments': tagAssignments.map((a) => a.toJson()).toList(),
@@ -178,6 +194,12 @@ class Session {
         court: Court.fromJson(json['court'] as Map<String, dynamic>),
         receivers: (json['receivers'] as List? ?? [])
             .map((r) => Receiver.fromJson(r as Map<String, dynamic>))
+            .toList(),
+        // Absent in sessions recorded before teams were user-defined. Such a
+        // session still replays; `TagRoster` falls back to colouring by the
+        // order teams appear among the players.
+        teams: (json['teams'] as List? ?? [])
+            .map((t) => Team.fromJson(t as Map<String, dynamic>))
             .toList(),
         tags: (json['tags'] as List? ?? [])
             .map((t) => Tag.fromJson(t as Map<String, dynamic>))

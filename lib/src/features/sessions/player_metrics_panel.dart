@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../analytics/analytics_providers.dart';
 import '../../analytics/session_metrics.dart';
+import '../../core/metric_format.dart';
 import '../court/tag_roster.dart';
+import 'analysis_navigation.dart';
 import 'replay_controller.dart';
 import 'replay_screen.dart';
 
@@ -41,7 +43,8 @@ class PlayerMetricsPanel extends ConsumerWidget {
             Text('Movement', style: theme.textTheme.titleMedium),
             const SizedBox(height: 2),
             Text(
-              'Distance • max / avg / now speed',
+              'Distance • max / avg / now speed. '
+              'Select a player for their own page.',
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
@@ -67,9 +70,22 @@ class PlayerMetricsPanel extends ConsumerWidget {
                               entry: roster.entryFor(track.tagId),
                               track: track,
                               playheadMicros: playheadMicros,
+                              onOpen: () => ref
+                                  .read(sessionViewProvider.notifier)
+                                  .showPlayer(track.tagId),
                             ),
                           const SizedBox(height: 8),
                           _TotalRow(metrics: metrics),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton.icon(
+                              onPressed: ref
+                                  .read(sessionViewProvider.notifier)
+                                  .showTeamAnalysis,
+                              icon: const Icon(Icons.insights, size: 18),
+                              label: const Text('Team analysis'),
+                            ),
+                          ),
                         ],
                       ),
               ),
@@ -85,11 +101,13 @@ class _MetricRow extends StatelessWidget {
   final TagRosterEntry? entry;
   final PlayerTrackMetrics track;
   final int? playheadMicros;
+  final VoidCallback onOpen;
 
   const _MetricRow({
     required this.entry,
     required this.track,
     required this.playheadMicros,
+    required this.onOpen,
   });
 
   @override
@@ -98,43 +116,52 @@ class _MetricRow extends StatelessWidget {
     final now =
         playheadMicros == null ? 0.0 : track.speedAt(playheadMicros!);
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 10,
-            height: 10,
-            margin: const EdgeInsets.only(top: 4, right: 8),
-            decoration: BoxDecoration(
-              color: entry?.color ?? TagRoster.unassignedColor,
-              shape: BoxShape.circle,
+    return InkWell(
+      onTap: onOpen,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 10,
+              height: 10,
+              margin: const EdgeInsets.only(top: 4, right: 8),
+              decoration: BoxDecoration(
+                color: entry?.color ?? TagRoster.unassignedColor,
+                shape: BoxShape.circle,
+              ),
             ),
-          ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  entry?.playerName ?? track.tagId,
-                  style: theme.textTheme.bodyMedium,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                Text(
-                  '${_metres(track.distanceMeters)} • '
-                  '${_speed(track.maxSpeedMps)} / '
-                  '${_speed(track.averageSpeedMps)} / '
-                  '${_speed(now)}',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                    fontFeatures: const [FontFeature.tabularFigures()],
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    entry?.playerName ?? track.tagId,
+                    style: theme.textTheme.bodyMedium,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                ),
-              ],
+                  Text(
+                    '${formatMetres(track.distanceMeters)} • '
+                    '${formatSpeed(track.maxSpeedMps)} / '
+                    '${formatSpeed(track.averageSpeedMps)} / '
+                    '${formatSpeed(now)}',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+            Icon(
+              Icons.chevron_right,
+              size: 18,
+              color: theme.colorScheme.outline,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -153,7 +180,7 @@ class _TotalRow extends StatelessWidget {
       children: [
         Text('Squad total', style: theme.textTheme.bodySmall),
         Text(
-          _metres(metrics.totalDistanceMeters),
+          formatMetres(metrics.totalDistanceMeters),
           style: theme.textTheme.bodySmall
               ?.copyWith(fontWeight: FontWeight.w600),
         ),
@@ -161,12 +188,3 @@ class _TotalRow extends StatelessWidget {
     );
   }
 }
-
-/// Metres up to a kilometre, then kilometres — a squad total passes 1 km
-/// within a few minutes and reads badly as five digits.
-String _metres(double metres) => metres >= 1000
-    ? '${(metres / 1000).toStringAsFixed(2)} km'
-    : '${metres.toStringAsFixed(1)} m';
-
-String _speed(double metresPerSecond) =>
-    '${metresPerSecond.toStringAsFixed(1)} m/s';

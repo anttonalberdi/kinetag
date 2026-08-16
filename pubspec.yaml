@@ -35,6 +35,9 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   flutter_riverpod: ^3.4.2
+  # Declared directly only for the `Override` type, which flutter_riverpod
+  # does not re-export; kept pinned to the same version.
+  riverpod: ^3.4.2
   meta: ^1.19.0
   uuid: ^4.6.0
   sqflite: ^2.4.3

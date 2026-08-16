@@ -43,4 +43,20 @@ class CourtTheme {
   /// Resolves the marking stroke width in logical pixels at [scale] px/m.
   double strokeWidth(double scale) =>
       (lineWidthMeters * scale).clamp(minLineWidthPixels, double.infinity);
+
+  /// The court as a backdrop rather than as the subject.
+  ///
+  /// A heatmap is a colour scale drawn on top of the floor, and the playing
+  /// green competes with it twice over: it is saturated enough to shift how
+  /// the colours above it read, and bright enough that the faint end of a ramp
+  /// disappears into it. This variant keeps every marking in place — a coach
+  /// reads a heatmap against the 6 m and 9 m lines — while dropping the
+  /// surface to a near-neutral dark and the lines to a whisper.
+  static const CourtTheme analysis = CourtTheme(
+    surroundColor: Color(0xFF12161C),
+    courtColor: Color(0xFF141A19),
+    goalAreaColor: Color(0xFF1A2321),
+    lineColor: Color(0x66F2F5F7),
+    goalColor: Color(0x99E8B04B),
+  );
 }

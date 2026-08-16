@@ -191,6 +191,8 @@ void main() {
       await controllerOf(h.container).startRecording();
 
       final session = stateOf(h.container).recordingSession!;
+      expect(session.teams, hasLength(2));
+      expect(session.teamFor(TeamSide.home)!.name, 'Home');
       expect(session.players, hasLength(12));
       expect(session.tags, hasLength(12));
       expect(session.tagAssignments, hasLength(12));

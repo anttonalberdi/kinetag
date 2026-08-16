@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:kinetag/src/analytics/analytics_thresholds.dart';
 import 'package:kinetag/src/analytics/session_metrics.dart';
 import 'package:kinetag/src/domain/domain.dart';
 
@@ -86,7 +87,7 @@ void main() {
       // last good position, so the real movement across the glitch survives.
       expect(dirty.discardedSteps, 1);
       expect(dirty.distanceMeters, closeTo(clean.distanceMeters, 1e-6));
-      expect(dirty.maxSpeedMps, lessThan(SessionMetrics.maxPlausibleSpeedMps));
+      expect(dirty.maxSpeedMps, lessThan(AnalyticsThresholds.defaults.maxPlausibleSpeedMps));
     });
 
     test('ignores duplicate timestamps instead of dividing by zero', () {

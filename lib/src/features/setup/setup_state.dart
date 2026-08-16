@@ -5,30 +5,127 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:meta/meta.dart';
 
 import '../../domain/domain.dart';
+import '../settings/app_settings.dart';
+import '../settings/settings_controller.dart';
 
-/// Default anchor layout: six receivers ringing the playing area.
+/// Fewest receivers that can position a tag in 2D.
 ///
-/// Real UWB anchors are mounted just outside the court and above head height.
-/// Spacing them around the perimeter (rather than only at the corners) keeps
-/// the geometric dilution of precision reasonable across the whole floor,
-/// which is why the two mid-touchline anchors are included.
-List<Receiver> defaultReceiverLayout(Court court) {
+/// Three ranges intersect at two points, and the ambiguity is resolved by the
+/// tag being on the floor of play. It works, but with no redundancy: lose one
+/// anchor to an occluded line of sight and positioning stops rather than
+/// degrades.
+const int minReceiverCount = 3;
+
+/// Most receivers the prototype supports.
+///
+/// A hard ceiling for now because the layout presets are hand-designed per
+/// count. Real halls will want more, at which point the presets become a
+/// generated ring rather than a table.
+const int maxReceiverCount = 6;
+
+/// The named shape a given receiver count is arranged in.
+///
+/// Anchor geometry is the dominant limit on UWB accuracy, so the presets are
+/// not decoration: each one keeps the anchors spread as widely as the hall
+/// allows, because positioning error grows sharply as the anchors bunch
+/// together or as the tag leaves the area they enclose.
+enum ReceiverLayoutShape {
+  /// Two anchors on one touchline's corners, one at the middle of the
+  /// opposite touchline.
+  triangle('Triangle'),
+
+  /// One anchor at each corner of the playing area.
+  square('Square'),
+
+  /// The square plus a fifth anchor at the middle of one touchline — a
+  /// triangle sitting on the square's edge.
+  squarePlusApex('Square + apex'),
+
+  /// The square plus an anchor at the middle of each touchline.
+  ring('Ring');
+
+  const ReceiverLayoutShape(this.displayName);
+
+  final String displayName;
+
+  /// The shape used for [count] receivers.
+  static ReceiverLayoutShape forCount(int count) => switch (count) {
+        <= 3 => triangle,
+        4 => square,
+        5 => squarePlusApex,
+        _ => ring,
+      };
+}
+
+/// Perimeter positions, clockwise from the top-left corner, for [count]
+/// receivers around a [court] with [margin] metres of clearance.
+///
+/// Returned as plain coordinates so the shapes can be reasoned about and
+/// tested without constructing receivers.
+List<({double x, double y})> receiverLayoutPositions(
+  Court court, {
+  required int count,
+  required double margin,
+}) {
   final w = court.widthMeters;
   final h = court.heightMeters;
-  const margin = 1.2; // metres outside the sideline
-  const mountHeight = 2.4;
+
+  final topLeft = (x: -margin, y: -margin);
+  final topMid = (x: w / 2, y: -margin);
+  final topRight = (x: w + margin, y: -margin);
+  final bottomRight = (x: w + margin, y: h + margin);
+  final bottomMid = (x: w / 2, y: h + margin);
+  final bottomLeft = (x: -margin, y: h + margin);
+
+  return switch (ReceiverLayoutShape.forCount(count)) {
+    // Three anchors cannot enclose a 40x20 rectangle from just outside it —
+    // an enclosing triangle would have to stand tens of metres beyond the
+    // hall's walls. The corners furthest from the apex therefore sit outside
+    // the anchor triangle and position worst; this arrangement simply makes
+    // that region as small as the geometry allows.
+    ReceiverLayoutShape.triangle => [topLeft, topRight, bottomMid],
+    ReceiverLayoutShape.square => [topLeft, topRight, bottomRight, bottomLeft],
+    ReceiverLayoutShape.squarePlusApex => [
+        topLeft,
+        topMid,
+        topRight,
+        bottomRight,
+        bottomLeft,
+      ],
+    ReceiverLayoutShape.ring => [
+        topLeft,
+        topMid,
+        topRight,
+        bottomRight,
+        bottomMid,
+        bottomLeft,
+      ],
+  };
+}
+
+/// Default anchor layout for [count] receivers ringing the playing area.
+///
+/// Real UWB anchors are mounted just outside the court and above head height,
+/// so every preset places them off the floor of play at [mountHeight].
+List<Receiver> defaultReceiverLayout(
+  Court court, {
+  int count = maxReceiverCount,
+  double margin = AppSettings.defaultReceiverMarginMeters,
+  double mountHeight = AppSettings.defaultMountHeightMeters,
+}) {
+  final clamped = count.clamp(minReceiverCount, maxReceiverCount);
+  final positions =
+      receiverLayoutPositions(court, count: clamped, margin: margin);
 
   return [
-    Receiver(id: 'rx-1', name: 'RX-01', x: -margin, y: -margin, z: mountHeight),
-    Receiver(id: 'rx-2', name: 'RX-02', x: w / 2, y: -margin, z: mountHeight),
-    Receiver(
-        id: 'rx-3', name: 'RX-03', x: w + margin, y: -margin, z: mountHeight),
-    Receiver(
-        id: 'rx-4', name: 'RX-04', x: w + margin, y: h + margin, z: mountHeight),
-    Receiver(
-        id: 'rx-5', name: 'RX-05', x: w / 2, y: h + margin, z: mountHeight),
-    Receiver(
-        id: 'rx-6', name: 'RX-06', x: -margin, y: h + margin, z: mountHeight),
+    for (var i = 0; i < positions.length; i++)
+      Receiver(
+        id: 'rx-${i + 1}',
+        name: 'RX-${(i + 1).toString().padLeft(2, '0')}',
+        x: positions[i].x,
+        y: positions[i].y,
+        z: mountHeight,
+      ),
   ];
 }
 
@@ -57,6 +154,16 @@ class SetupState {
     this.selectedReceiverId,
     this.showGrid = false,
   });
+
+  int get receiverCount => receivers.length;
+
+  /// The preset shape the current receiver count corresponds to.
+  ///
+  /// Derived from the count rather than stored: after a receiver is dragged
+  /// the arrangement is no longer the preset, and a stored shape would then
+  /// be a claim the positions no longer support.
+  ReceiverLayoutShape get layoutShape =>
+      ReceiverLayoutShape.forCount(receivers.length);
 
   Receiver? get selectedReceiver {
     if (selectedReceiverId == null) return null;
@@ -112,7 +219,43 @@ class SetupController extends Notifier<SetupState> {
   @override
   SetupState build() {
     final court = Court.handball();
-    return SetupState(court: court, receivers: defaultReceiverLayout(court));
+    return SetupState(
+      court: court,
+      receivers: _layoutFor(court, maxReceiverCount),
+    );
+  }
+
+  /// Builds a preset layout using the current settings.
+  ///
+  /// `ref.read`, not `ref.watch`: changing the default mount height must not
+  /// silently reposition anchors the operator has already placed. It applies
+  /// to the next layout generated — a count change or a reset.
+  List<Receiver> _layoutFor(Court court, int count) {
+    final settings = ref.read(appSettingsProvider);
+    return defaultReceiverLayout(
+      court,
+      count: count,
+      margin: settings.receiverMarginMeters,
+      mountHeight: settings.receiverMountHeightMeters,
+    );
+  }
+
+  /// Sets how many receivers the cell has, between [minReceiverCount] and
+  /// [maxReceiverCount].
+  ///
+  /// Changing the count re-applies the preset for the new count rather than
+  /// adding or dropping anchors at the end of the list. The presets are whole
+  /// shapes: four corners are not a triangle plus one, and appending a fifth
+  /// anchor to a triangle would leave a layout that is neither shape. The UI
+  /// says so next to the control.
+  void setReceiverCount(int count) {
+    final clamped = count.clamp(minReceiverCount, maxReceiverCount);
+    if (clamped == state.receivers.length) return;
+
+    state = state.copyWith(
+      receivers: _layoutFor(state.court, clamped),
+      clearSelection: true,
+    );
   }
 
   void setShowGrid(bool value) => state = state.copyWith(showGrid: value);
@@ -188,9 +331,9 @@ class SetupController extends Notifier<SetupState> {
     );
   }
 
-  /// Restores the default six-receiver ring.
+  /// Restores the preset layout for the current receiver count.
   void resetLayout() => state = state.copyWith(
-        receivers: defaultReceiverLayout(state.court),
+        receivers: _layoutFor(state.court, state.receivers.length),
         clearSelection: true,
       );
 

@@ -4,14 +4,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/duration_format.dart';
 import '../../domain/domain.dart';
 import '../../storage/storage_providers.dart';
+import 'analysis_navigation.dart';
+import 'player_analysis_screen.dart';
 import 'replay_controller.dart';
 import 'replay_screen.dart';
+import 'session_analysis_screen.dart';
 
-/// Recorded sessions: browse the list, open one, replay it.
+/// Recorded sessions: browse the list, open one, replay it, analyse it.
 ///
-/// List and replay are two views of one screen rather than two routes, so the
-/// navigation rail stays visible on desktop and the back gesture on a phone
-/// still leaves the app rather than the replay.
+/// The list, the replay and the analysis pages are views of one screen rather
+/// than routes, so the navigation rail stays visible on desktop and the back
+/// gesture on a phone still leaves the app rather than unwinding an analysis
+/// trail. [AnalysisBreadcrumbs] is what carries the reader's position
+/// instead.
 class SessionsScreen extends ConsumerStatefulWidget {
   const SessionsScreen({super.key});
 
@@ -23,19 +28,32 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
   bool _replaying = false;
 
   Future<void> _open(Session session) async {
+    // Always land on the court: opening a recording and finding yesterday's
+    // analysis page would be disorienting.
+    ref.read(sessionViewProvider.notifier).showReplay();
     setState(() => _replaying = true);
     await ref.read(replayControllerProvider.notifier).open(session);
   }
 
-  Future<void> _closeReplay() async {
+  Future<void> _closeSession() async {
+    ref.read(sessionViewProvider.notifier).showReplay();
     setState(() => _replaying = false);
     await ref.read(replayControllerProvider.notifier).close();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_replaying) return ReplayScreen(onBack: _closeReplay);
-    return _SessionList(onOpen: _open);
+    if (!_replaying) return _SessionList(onOpen: _open);
+
+    return switch (ref.watch(sessionViewProvider)) {
+      ReplayView() => ReplayScreen(onBack: _closeSession),
+      TeamAnalysisView() =>
+        SessionAnalysisScreen(onBackToSessions: _closeSession),
+      PlayerAnalysisView(:final tagId) => PlayerAnalysisScreen(
+          tagId: tagId,
+          onBackToSessions: _closeSession,
+        ),
+    };
   }
 }
 

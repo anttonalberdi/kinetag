@@ -148,6 +148,7 @@ class LiveController extends Notifier<LiveState> {
       createdAt: createdAt,
       court: setup.court,
       receivers: List.of(setup.receivers),
+      teams: List.of(roster.teams),
       tags: List.of(roster.tags),
       players: List.of(roster.players),
       tagAssignments: List.of(roster.assignments),
@@ -275,3 +276,12 @@ class LiveController extends Notifier<LiveState> {
 
 final liveControllerProvider =
     NotifierProvider<LiveController, LiveState>(LiveController.new);
+
+/// Whether a recording is currently open.
+///
+/// Screens that must lock controls during a capture — setup's roster, the
+/// capture rate in settings — depend on this rather than on [LiveState], so
+/// they rebuild only when recording starts or stops and not on every frame.
+final recordingInProgressProvider = Provider<bool>(
+  (ref) => ref.watch(liveControllerProvider.select((s) => s.isRecording)),
+);

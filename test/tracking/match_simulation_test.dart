@@ -99,8 +99,8 @@ void main() {
           expect(
             track[i - 1].speedTo(track[i]),
             // A hair of slack: velocity is integrated at the step boundary.
-            lessThanOrEqualTo(participant.role.maxSpeedMps + 0.01),
-            reason: '${participant.role.displayName} moved too fast',
+            lessThanOrEqualTo(participant.movement.maxSpeedMps + 0.01),
+            reason: '${participant.role!.displayName} moved too fast',
           );
         }
       }
@@ -138,7 +138,7 @@ void main() {
         }
         // Two minutes of handball: tens of metres at minimum, even in goal.
         expect(distance, greaterThan(20.0),
-            reason: '${participant.role.displayName} barely moved');
+            reason: '${participant.role!.displayName} barely moved');
       }
     });
   });
@@ -164,10 +164,10 @@ void main() {
       );
 
       final home = squad
-          .forTeam(SimulatedTeam.home)
+          .forSide(TeamSide.home)
           .firstWhere((p) => p.role == PlayerRole.goalkeeper);
       final away = squad
-          .forTeam(SimulatedTeam.away)
+          .forSide(TeamSide.away)
           .firstWhere((p) => p.role == PlayerRole.goalkeeper);
 
       for (final sample in trackOf(frames, home.tagId)) {
@@ -211,8 +211,8 @@ void main() {
       final simulation = MatchSimulation(court: court, squad: squad, seed: 23);
       final frames = run(simulation, 60);
 
-      double centroidX(PositionFrame frame, SimulatedTeam team) {
-        final ids = squad.forTeam(team).map((p) => p.tagId).toSet();
+      double centroidX(PositionFrame frame, TeamSide side) {
+        final ids = squad.forSide(side).map((p) => p.tagId).toSet();
         final xs = frame.samples
             .where((s) => ids.contains(s.tagId))
             .map((s) => s.x)
@@ -221,8 +221,104 @@ void main() {
       }
 
       for (final frame in frames) {
-        expect(centroidX(frame, SimulatedTeam.home),
-            lessThan(centroidX(frame, SimulatedTeam.away)));
+        expect(centroidX(frame, TeamSide.home),
+            lessThan(centroidX(frame, TeamSide.away)));
+      }
+    });
+  });
+
+  group('the bench', () {
+    /// A 1 + 4 line-up out of the default six, so one substitute per side
+    /// sits: the goalkeeper and four field players play, the pivot waits.
+    MatchSimulation benchedSimulation() => MatchSimulation(
+          court: court,
+          squad: SimulatedSquad.handballTeams(fieldPlayersOnCourt: 4),
+          seed: 7,
+        );
+
+    test('seats sit half a metre outside a sideline, one side per team', () {
+      final simulation = benchedSimulation();
+
+      expect(simulation.benchSeatAt(TeamSide.home, 0),
+          (20.0 - MatchSimulation.benchCentreGapMeters, -0.5));
+      expect(simulation.benchSeatAt(TeamSide.away, 0),
+          (20.0 + MatchSimulation.benchCentreGapMeters, 20.5));
+    });
+
+    test('substitutes stand next to each other on their own half', () {
+      final simulation = benchedSimulation();
+
+      for (final side in TeamSide.values) {
+        final first = simulation.benchSeatAt(side, 0);
+        final second = simulation.benchSeatAt(side, 1);
+
+        expect((second.$1 - first.$1).abs(),
+            closeTo(MatchSimulation.benchSpacingMeters, 1e-9));
+        expect(second.$2, first.$2, reason: 'a bench is a straight line');
+        // Home defends x = 0, so its bench runs back from the centre line
+        // toward its own goal; away's mirrors it.
+        expect(side == TeamSide.home ? second.$1 < first.$1 : second.$1 > first.$1,
+            isTrue);
+      }
+    });
+
+    test('a substitute stays on the bench for the whole match', () {
+      final simulation = benchedSimulation();
+      final benched = simulation.squad.benched.toList();
+      expect(benched, hasLength(2), reason: 'one substitute per side');
+
+      final frames = run(simulation, 120);
+
+      for (final participant in benched) {
+        final seat = simulation.benchSeatAt(
+            participant.side, participant.benchSeat!);
+        for (final sample in trackOf(frames, participant.tagId)) {
+          expect(sample.x, closeTo(seat.$1, 1e-9));
+          expect(sample.y, closeTo(seat.$2, 1e-9));
+        }
+      }
+    });
+
+    test('a substitute covers no ground, which is what marks them out', () {
+      // The analytics downstream have no notion of a bench; a flat track is
+      // the whole signal that this player did not play.
+      final simulation = benchedSimulation();
+      final frames = run(simulation, 60);
+
+      for (final participant in simulation.squad.benched) {
+        final track = trackOf(frames, participant.tagId);
+        var distance = 0.0;
+        for (var i = 1; i < track.length; i++) {
+          distance += math.sqrt(
+            math.pow(track[i].x - track[i - 1].x, 2) +
+                math.pow(track[i].y - track[i - 1].y, 2),
+          );
+        }
+        expect(distance, closeTo(0, 1e-6));
+      }
+    });
+
+    test('the players who are fielded still play a normal match', () {
+      // Benching somebody must not shrink the game to a huddle.
+      final simulation = benchedSimulation();
+      final frames = run(simulation, 60);
+
+      for (final participant in simulation.squad.onCourt) {
+        final track = trackOf(frames, participant.tagId);
+        for (final sample in track) {
+          expect(sample.x, inInclusiveRange(0, court.widthMeters));
+          expect(sample.y, inInclusiveRange(0, court.heightMeters));
+        }
+
+        var distance = 0.0;
+        for (var i = 1; i < track.length; i++) {
+          distance += math.sqrt(
+            math.pow(track[i].x - track[i - 1].x, 2) +
+                math.pow(track[i].y - track[i - 1].y, 2),
+          );
+        }
+        expect(distance, greaterThan(5.0),
+            reason: '${participant.tagId} should be moving');
       }
     });
   });

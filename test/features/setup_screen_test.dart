@@ -3,8 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kinetag/src/core/court_view_transform.dart';
+import 'package:kinetag/src/domain/domain.dart';
 import 'package:kinetag/src/features/court/court_canvas.dart';
 import 'package:kinetag/src/features/setup/coordinate_field.dart';
+import 'package:kinetag/src/features/setup/roster_panel.dart';
+import 'package:kinetag/src/features/setup/roster_state.dart';
 import 'package:kinetag/src/features/setup/setup_screen.dart';
 import 'package:kinetag/src/features/setup/setup_state.dart';
 
@@ -51,7 +54,69 @@ void main() {
 
     expect(find.byType(CourtCanvas), findsOneWidget);
     expect(state.receivers, hasLength(6));
-    expect(find.text('6 receivers'), findsOneWidget);
+    expect(find.textContaining('Ring layout'), findsOneWidget);
+  });
+
+  testWidgets('the count selector switches to another layout preset',
+      (tester) async {
+    await pumpSetup(tester);
+
+    // The segments are labelled with the count itself.
+    await tester.tap(
+      find.descendant(
+        of: find.byType(SegmentedButton<int>),
+        matching: find.text('3'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(state.receivers, hasLength(3));
+    expect(state.layoutShape, ReceiverLayoutShape.triangle);
+    expect(find.textContaining('Triangle layout'), findsOneWidget);
+  });
+
+  testWidgets('switching to the players section shows the roster',
+      (tester) async {
+    await pumpSetup(tester);
+
+    await tester.tap(find.text('Players').first);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(RosterPanel), findsOneWidget);
+    expect(find.byType(CourtCanvas), findsNothing);
+    expect(find.textContaining('12 player tags in total'), findsOneWidget);
+    expect(find.text('2 teams'), findsOneWidget);
+    // The home team's card is the one on screen; the away card sits below the
+    // fold of the lazily built list.
+    expect(find.text('Home team name'), findsOneWidget);
+    expect(container.read(rosterControllerProvider).teamCount, 2);
+  });
+
+  testWidgets('adding a player from a team card grows that squad',
+      (tester) async {
+    await pumpSetup(tester);
+    await tester.tap(find.text('Players').first);
+    await tester.pumpAndSettle();
+
+    // The home team's button sits below its six player rows, outside the
+    // built part of the lazy list.
+    await tester.scrollUntilVisible(
+      find.text('Add player').first,
+      300,
+      scrollable: find
+          .descendant(
+            of: find.byType(RosterPanel),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add player').first);
+    await tester.pumpAndSettle();
+
+    final roster = container.read(rosterControllerProvider);
+    expect(roster.playerCount(TeamSide.home), 7);
+    expect(roster.playerCount(TeamSide.away), 6);
   });
 
   testWidgets('starts with nothing selected', (tester) async {

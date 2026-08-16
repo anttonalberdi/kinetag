@@ -26,6 +26,15 @@ import 'simulated_squad.dart';
 /// keeps trajectories smooth and — more importantly — keeps derived speed and
 /// acceleration physically plausible, so the Phase 9 analytics are exercised
 /// with realistic input rather than with teleporting dots.
+///
+/// ## The bench
+///
+/// Whoever the squad has not fielded is parked at a fixed seat just outside a
+/// sideline (see [benchSeatAt]) and left standing there. None of the above
+/// applies to them: no wander, no play phase, no court clamp. That is
+/// deliberate — a substitute's tag keeps reporting, so the simulator keeps
+/// emitting for it, and the resulting flat track is what tells the analytics
+/// downstream that this player did not play.
 class MatchSimulation {
   final Court court;
   final SimulatedSquad squad;
@@ -51,6 +60,21 @@ class MatchSimulation {
   /// fraction of court length.
   static const double _playSwingFraction = 0.28;
 
+  /// How far beyond the sideline the bench stands, in metres.
+  ///
+  /// Absolute rather than a fraction of the court, unlike everything a role
+  /// envelope declares: a substitute stands a stride off the line whether the
+  /// hall holds a full court or a training pitch.
+  static const double benchClearanceMeters = 0.5;
+
+  /// Distance between neighbouring bench seats, in metres. Wide enough that
+  /// two substitutes read as two dots on court, close enough to look like
+  /// people standing next to each other.
+  static const double benchSpacingMeters = 0.9;
+
+  /// Gap between the centre line and the first bench seat, in metres.
+  static const double benchCentreGapMeters = 1.0;
+
   final math.Random _random;
   final List<_Body> _bodies = [];
 
@@ -65,9 +89,14 @@ class MatchSimulation {
     for (final participant in squad.participants) {
       final anchor = anchorFor(participant, 0.0);
       final body = _Body(participant: participant, x: anchor.$1, y: anchor.$2);
-      _retarget(body);
-      // Stagger the first retarget so the squad does not move in lockstep.
-      body.retargetInSeconds *= _random.nextDouble();
+      // A substitute has nothing to wander toward, and drawing for one would
+      // shift every fielded player's wander as well — the bench would change
+      // the match instead of only sitting out of it.
+      if (participant.isOnCourt) {
+        _retarget(body);
+        // Stagger the first retarget so the squad does not move in lockstep.
+        body.retargetInSeconds *= _random.nextDouble();
+      }
       _bodies.add(body);
     }
   }
@@ -88,26 +117,53 @@ class MatchSimulation {
   /// that when one side attacks the other retreats — both formations travel
   /// the same way down the court, which is what a real possession looks like.
   (double, double) anchorFor(SimulatedParticipant participant, double phase) {
-    final role = participant.role;
-    final localPhase =
-        participant.team == SimulatedTeam.home ? phase : -phase;
-    final shift =
-        localPhase * role.advanceFactor * _playSwingFraction * court.widthMeters;
+    final seat = participant.benchSeat;
+    if (seat != null) return benchSeatAt(participant.side, seat);
 
-    final localX = role.homeX * court.widthMeters + shift;
-    final localY = role.homeY * court.heightMeters;
+    final movement = participant.movement;
+    final isHome = participant.side == TeamSide.home;
+    final localPhase = isHome ? phase : -phase;
+    final shift = localPhase *
+        movement.advanceFactor *
+        _playSwingFraction *
+        court.widthMeters;
 
-    final x = participant.team == SimulatedTeam.home
-        ? localX
-        : court.widthMeters - localX;
-    final y = participant.team == SimulatedTeam.home
-        ? localY
-        : court.heightMeters - localY;
+    final localX = movement.homeX * court.widthMeters + shift;
+    final localY = movement.homeY * court.heightMeters;
+
+    final x = isHome ? localX : court.widthMeters - localX;
+    final y = isHome ? localY : court.heightMeters - localY;
 
     return (
       x.clamp(_courtInsetMeters, court.widthMeters - _courtInsetMeters),
       y.clamp(_courtInsetMeters, court.heightMeters - _courtInsetMeters),
     );
+  }
+
+  /// Where the [seat]-th substitute of [side] stands, in world metres.
+  ///
+  /// Benches sit just outside a sideline — home beyond `y = 0`, away beyond
+  /// `y = height`, which is the same 180° rotation the role frame uses — and
+  /// run from beside the centre line back toward the team's own goal, the way
+  /// a hall lays them out. Seats do not move: a substitute is standing, not
+  /// playing, and a track that stays put is exactly what should distinguish
+  /// them in the analytics afterwards.
+  ///
+  /// Unlike a role anchor this is not clamped into the playing area — that is
+  /// the whole point of it — but it is kept between the goal lines so a deep
+  /// bench does not trail off behind the goal.
+  (double, double) benchSeatAt(TeamSide side, int seat) {
+    final isHome = side == TeamSide.home;
+    final halfWidth = court.widthMeters / 2;
+    final fromCentre = benchCentreGapMeters + seat * benchSpacingMeters;
+
+    final x = (isHome ? halfWidth - fromCentre : halfWidth + fromCentre)
+        .clamp(_courtInsetMeters, court.widthMeters - _courtInsetMeters);
+    final y = isHome
+        ? -benchClearanceMeters
+        : court.heightMeters + benchClearanceMeters;
+
+    return (x, y);
   }
 
   /// Advances every player by [dtMicros] and returns the resulting frame,
@@ -147,8 +203,12 @@ class MatchSimulation {
   }
 
   void _step(_Body body, double dt, double phase) {
-    body.retargetInSeconds -= dt;
-    if (body.retargetInSeconds <= 0) _retarget(body);
+    final onCourt = body.participant.isOnCourt;
+
+    if (onCourt) {
+      body.retargetInSeconds -= dt;
+      if (body.retargetInSeconds <= 0) _retarget(body);
+    }
 
     final anchor = anchorFor(body.participant, phase);
     final targetX = anchor.$1 + body.offsetX;
@@ -164,7 +224,7 @@ class MatchSimulation {
     var desiredY = 0.0;
     if (distance > 1e-6) {
       final speed = math.min(
-        body.participant.role.maxSpeedMps,
+        body.participant.movement.maxSpeedMps,
         distance / _arrivalSeconds,
       );
       desiredX = toTargetX / distance * speed;
@@ -186,8 +246,13 @@ class MatchSimulation {
     body.x += body.vx * dt;
     body.y += body.vy * dt;
 
-    // Keep everyone on the floor of play. Zeroing the offending velocity
-    // component avoids a player grinding along a wall at full speed.
+    // Keep everyone on the floor of play. A substitute is by definition not on
+    // it — the seat is outside the sideline — so clamping would drag the whole
+    // bench back over the line.
+    if (!onCourt) return;
+
+    // Zeroing the offending velocity component avoids a player grinding along
+    // a wall at full speed.
     final maxX = court.widthMeters - _courtInsetMeters;
     final maxY = court.heightMeters - _courtInsetMeters;
     if (body.x < _courtInsetMeters) {
@@ -209,13 +274,15 @@ class MatchSimulation {
   /// Draws a fresh wander offset inside the role's ellipse and schedules the
   /// next redraw.
   void _retarget(_Body body) {
-    final role = body.participant.role;
+    final movement = body.participant.movement;
     // Uniform-ish point in an ellipse: random direction, square-rooted radius
     // so targets do not cluster at the centre.
     final angle = _random.nextDouble() * 2 * math.pi;
     final radius = math.sqrt(_random.nextDouble());
-    body.offsetX = math.cos(angle) * radius * role.rangeX * court.widthMeters;
-    body.offsetY = math.sin(angle) * radius * role.rangeY * court.heightMeters;
+    body.offsetX =
+        math.cos(angle) * radius * movement.rangeX * court.widthMeters;
+    body.offsetY =
+        math.sin(angle) * radius * movement.rangeY * court.heightMeters;
     body.retargetInSeconds = 1.5 + _random.nextDouble() * 2.5;
   }
 

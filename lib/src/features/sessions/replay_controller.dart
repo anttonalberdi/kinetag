@@ -43,6 +43,18 @@ class ReplayState {
 
   bool get hasRecording => frameCount > 0;
 
+  /// Absolute timestamp the playhead's zero corresponds to.
+  ///
+  /// Samples carry absolute times while the transport works in elapsed time,
+  /// so anything that maps between the two — a chart of a player's speed, for
+  /// instance — needs this offset. Derived from the frame on screen rather
+  /// than stored, because the frame and the position are always set together
+  /// from the same source and so cannot disagree. Null before the first frame,
+  /// when there is nothing to align to.
+  int? get recordingStartMicros => frame == null
+      ? null
+      : frame!.timestampMicros - position.inMicroseconds;
+
   /// Playhead as a fraction of the recording, in 0..1.
   double get progress {
     final total = duration.inMicroseconds;

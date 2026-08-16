@@ -53,6 +53,7 @@ class TagRoster {
   final List<Player> players;
   final List<Tag> tags;
   final List<TagAssignment> assignments;
+  final List<Team> teams;
   final Map<String, TagRosterEntry> byTagId;
 
   const TagRoster({
@@ -60,30 +61,43 @@ class TagRoster {
     required this.tags,
     required this.assignments,
     required this.byTagId,
+    this.teams = const [],
   });
 
-  /// Colour per team, in the order teams first appear.
-  static const List<Color> teamColors = [
-    Color(0xFF5AA9FF),
-    Color(0xFFFF9445),
-    Color(0xFF67D68A),
-    Color(0xFFD98CFF),
-  ];
+  /// The palette a team's colour is chosen from, in display form.
+  ///
+  /// `final` rather than `const` because it is derived from the domain's
+  /// packed-int palette — the single place a colour is declared.
+  static final List<Color> teamColors = List.unmodifiable(
+    [for (final value in Team.colorPalette) Color(value)],
+  );
 
   /// Colour for a tag with no known player.
-  static const Color unassignedColor = Color(0xFFB9C4CF);
+  static const Color unassignedColor = Color(Team.unassignedColorValue);
 
+  /// Builds the on-court appearance from a setup or a session snapshot.
+  ///
+  /// [teams] carries the colour each side was given. It is optional because a
+  /// session recorded before teams were user-defined has none; those fall back
+  /// to colouring by the order team names appear among the players, which is
+  /// what such a recording was captured under.
   factory TagRoster.fromSetup({
     required List<Player> players,
     required List<Tag> tags,
     required List<TagAssignment> assignments,
+    List<Team> teams = const [],
   }) {
-    // Team order is taken from the player list rather than sorted
-    // alphabetically, so "Home" keeps its colour when an away side is renamed.
+    final teamBySide = {for (final team in teams) team.side: team};
+
+    // Legacy fallback only. Team order is taken from the player list rather
+    // than sorted alphabetically, so the first side keeps its colour when the
+    // other is renamed.
     final teamOrder = <String>[];
-    for (final player in players) {
-      final team = player.team;
-      if (team != null && !teamOrder.contains(team)) teamOrder.add(team);
+    if (teams.isEmpty) {
+      for (final player in players) {
+        final name = player.team;
+        if (name != null && !teamOrder.contains(name)) teamOrder.add(name);
+      }
     }
 
     Player? playerFor(String tagId) {
@@ -96,19 +110,34 @@ class TagRoster {
       return null;
     }
 
+    Color colorFor(Player? player) {
+      if (player == null) return unassignedColor;
+
+      final side = player.side;
+      if (side != null) {
+        final team = teamBySide[side];
+        if (team != null) return Color(team.colorValue);
+      }
+
+      final index = player.team == null ? -1 : teamOrder.indexOf(player.team!);
+      return index < 0 ? unassignedColor : teamColors[index % teamColors.length];
+    }
+
     final byTagId = <String, TagRosterEntry>{};
     for (final tag in tags) {
       final player = playerFor(tag.id);
-      final teamIndex = player?.team == null ? -1 : teamOrder.indexOf(player!.team!);
+      // The team record is authoritative for the name: a player's `team`
+      // string is a copy that a rename updates, and preferring the record
+      // means a stale copy can never surface in the legend.
+      final teamName =
+          teamBySide[player?.side]?.name ?? player?.team;
 
       byTagId[tag.id] = TagRosterEntry(
         tagId: tag.id,
         playerName: player?.name ?? tag.name,
-        team: player?.team,
+        team: teamName,
         label: player?.shortLabel ?? _tagFallbackLabel(tag),
-        color: teamIndex < 0
-            ? unassignedColor
-            : teamColors[teamIndex % teamColors.length],
+        color: colorFor(player),
       );
     }
 
@@ -116,6 +145,7 @@ class TagRoster {
       players: players,
       tags: tags,
       assignments: assignments,
+      teams: teams,
       byTagId: byTagId,
     );
   }
