@@ -7,6 +7,15 @@ String formatMetres(double metres) => metres >= 1000
 String formatSpeed(double metresPerSecond) =>
     '${metresPerSecond.toStringAsFixed(1)} m/s';
 
+/// Ground covered per minute measured.
+///
+/// The figure that survives a substitution, and so the only fair way to
+/// compare a player who played twenty minutes with one who played five: a
+/// total says who was on the court longest, a rate says who worked hardest
+/// while they were on it.
+String formatMetresPerMinute(double metresPerMinute) =>
+    '${metresPerMinute.round()} m/min';
+
 /// A share of a whole as a percentage, without decimals.
 ///
 /// Clamped, because it labels a slice of something: a band of a bar or a

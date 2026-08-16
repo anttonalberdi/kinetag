@@ -3,10 +3,12 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../analytics/play_metrics.dart';
 import '../../analytics/session_metrics.dart';
 import '../../analytics/speed_zones.dart';
 import '../../core/duration_format.dart';
 import '../../core/metric_format.dart';
+import 'analysis_providers.dart';
 import 'replay_controller.dart';
 
 /// Heading for one block of an analysis page.
@@ -320,6 +322,216 @@ class _ZoneLegendItem extends StatelessWidget {
                 style: theme.textTheme.labelSmall
                     ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
               ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// Chooses the stretch of the recording every figure on the page is measured
+/// over.
+///
+/// Placed at the top of a report rather than on each figure, because the
+/// alternative — a per-card toggle — invites reading an attacking distance next
+/// to a whole-match average and comparing them. One control means every number
+/// on screen always answers the same question.
+class PlaySplitSelector extends ConsumerWidget {
+  /// Whether attacking and defending could be told apart at all. With no
+  /// goalkeeper tracked those two are offered but not selectable, which says
+  /// more than hiding them would: the reader learns the feature exists and
+  /// what it needs.
+  final bool phasesAvailable;
+
+  const PlaySplitSelector({super.key, this.phasesAvailable = true});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final selected = ref.watch(playSplitProvider);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Scaled down rather than scrolled: a control this small should never
+        // be something the reader has to find by dragging, and a second
+        // scrollable inside a scrolling page is a nuisance to drive with a
+        // trackpad and with a test alike.
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: SegmentedButton<PlaySplit>(
+            showSelectedIcon: false,
+            segments: [
+              for (final split in PlaySplit.selectable)
+                ButtonSegment(
+                  value: split,
+                  label: Text(split.label),
+                  enabled: phasesAvailable || split == PlaySplit.onCourt,
+                ),
+            ],
+            selected: {selected},
+            onSelectionChanged: (selection) =>
+                ref.read(playSplitProvider.notifier).select(selection.first),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          phasesAvailable
+              ? selected.description
+              : 'Bench time excluded. Attacking and defending need a '
+                  'goalkeeper on the roster to be told apart.',
+          style: theme.textTheme.bodySmall
+              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        ),
+      ],
+    );
+  }
+}
+
+/// One slice of a [TimeBreakdownBar].
+@immutable
+class TimeShare {
+  final String label;
+  final Duration duration;
+  final Color color;
+
+  const TimeShare({
+    required this.label,
+    required this.duration,
+    required this.color,
+  });
+}
+
+/// How a span of time divides, in absolute terms and as a share of a whole.
+///
+/// Both readings are shown together because neither is sufficient on its own:
+/// "18:20" does not say whether that was most of the match, and "61%" does not
+/// say whether the match was ten minutes or ninety.
+class TimeBreakdownBar extends StatelessWidget {
+  final List<TimeShare> parts;
+
+  /// The whole the shares are measured against. Defaults to the sum of
+  /// [parts], which is right for a breakdown that partitions something and
+  /// wrong for one measured against a longer session — pass it explicitly
+  /// there.
+  final Duration? total;
+
+  final double height;
+
+  const TimeBreakdownBar({
+    super.key,
+    required this.parts,
+    this.total,
+    this.height = 14,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    final whole = total ??
+        parts.fold<Duration>(Duration.zero, (sum, part) => sum + part.duration);
+    final wholeMicros = whole.inMicroseconds;
+
+    if (wholeMicros <= 0) {
+      return Text(
+        'No time was measured.',
+        style: theme.textTheme.bodySmall,
+      );
+    }
+
+    final present = [
+      for (final part in parts)
+        if (part.duration > Duration.zero) part,
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: SizedBox(
+            height: height,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final part in present)
+                  Expanded(
+                    flex: math.max(
+                      1,
+                      (part.duration.inMicroseconds / wholeMicros * 1000)
+                          .round(),
+                    ),
+                    child: ColoredBox(color: part.color),
+                  ),
+                // What the parts do not account for, left unpainted rather
+                // than stretched over: a bar that always fills would hide the
+                // time nobody was measured.
+                if (_unaccounted(present, wholeMicros) > 0)
+                  Expanded(
+                    flex: _unaccounted(present, wholeMicros),
+                    child: ColoredBox(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 18,
+          runSpacing: 6,
+          children: [
+            for (final part in parts)
+              _TimeLegendItem(
+                part: part,
+                share: part.duration.inMicroseconds / wholeMicros,
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  static int _unaccounted(List<TimeShare> present, int wholeMicros) {
+    final used = present.fold(0, (sum, p) => sum + p.duration.inMicroseconds);
+    return ((wholeMicros - used) / wholeMicros * 1000).round();
+  }
+}
+
+class _TimeLegendItem extends StatelessWidget {
+  final TimeShare part;
+  final double share;
+
+  const _TimeLegendItem({required this.part, required this.share});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(color: part.color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 6),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(part.label, style: theme.textTheme.bodySmall),
+            Text(
+              '${formatElapsed(part.duration)} • ${formatShare(share)}',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
           ],
         ),
       ],

@@ -82,3 +82,115 @@ class AnalyticsThresholds {
       'window ${speedWindow.inMilliseconds} ms, '
       'confidence >= ${minConfidence.toStringAsFixed(2)})';
 }
+
+/// The knobs that decide *when* a player was playing and *which way* their
+/// team was playing at the time.
+///
+/// Separate from [AnalyticsThresholds] because the two answer different
+/// questions and fail differently. Those settings reject bad measurements; the
+/// ones here interpret good ones, turning positions into "on court", "on the
+/// bench", "attacking" and "defending". A recording can be perfectly clean and
+/// still be segmented wrongly, so the segmentation carries its own settings and
+/// is reported with them, exactly as the movement figures are.
+@immutable
+class PlayThresholds {
+  /// How far inside the lines a tag must be to count as having come on, in
+  /// metres.
+  ///
+  /// Together with [offCourtMarginMeters] this is a hysteresis band: a player
+  /// standing on the sideline does not flicker between playing and benched
+  /// every time positioning noise moves them a few centimetres, because
+  /// leaving requires crossing a different, further line than entering did.
+  final double onCourtInsetMeters;
+
+  /// How far outside the lines a tag must be to count as having left, in
+  /// metres.
+  final double offCourtMarginMeters;
+
+  /// The shortest on-court or bench spell that is believed.
+  ///
+  /// Ten seconds is chosen against the sport, not against the noise: no real
+  /// substitution puts a player on for less, and no legitimate reason to be
+  /// off the court during play — a throw-in taken from behind the line, a
+  /// player stumbling over it — lasts longer. Anything shorter is absorbed
+  /// into the spell before it, so a corner throw is not recorded as a
+  /// substitution and back again.
+  final Duration minStint;
+
+  /// How long the goalkeeper signal is averaged over before a phase is called.
+  ///
+  /// A keeper drifts around their line for reasons that have nothing to do
+  /// with where the ball is, and that drift is the same size as the signal
+  /// being measured. Averaging over seconds removes it; a handball possession
+  /// lasts far longer than this window, so almost none of the real signal goes
+  /// with it.
+  final Duration possessionWindow;
+
+  /// How far the smoothed keeper signal must move off centre before a phase is
+  /// called, in metres.
+  ///
+  /// In metres rather than as a fraction of the court because a keeper's step
+  /// off the goal line is an absolute distance — the same on a full court as
+  /// on a training pitch.
+  final double possessionMarginMeters;
+
+  /// The shortest possession that is believed, for the same reason
+  /// [minStint] exists.
+  final Duration minPossession;
+
+  const PlayThresholds({
+    this.onCourtInsetMeters = 0.10,
+    this.offCourtMarginMeters = 0.30,
+    this.minStint = const Duration(seconds: 10),
+    this.possessionWindow = const Duration(seconds: 5),
+    this.possessionMarginMeters = 0.5,
+    this.minPossession = const Duration(seconds: 6),
+  });
+
+  static const PlayThresholds defaults = PlayThresholds();
+
+  PlayThresholds copyWith({
+    double? onCourtInsetMeters,
+    double? offCourtMarginMeters,
+    Duration? minStint,
+    Duration? possessionWindow,
+    double? possessionMarginMeters,
+    Duration? minPossession,
+  }) =>
+      PlayThresholds(
+        onCourtInsetMeters: onCourtInsetMeters ?? this.onCourtInsetMeters,
+        offCourtMarginMeters: offCourtMarginMeters ?? this.offCourtMarginMeters,
+        minStint: minStint ?? this.minStint,
+        possessionWindow: possessionWindow ?? this.possessionWindow,
+        possessionMarginMeters:
+            possessionMarginMeters ?? this.possessionMarginMeters,
+        minPossession: minPossession ?? this.minPossession,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PlayThresholds &&
+          other.onCourtInsetMeters == onCourtInsetMeters &&
+          other.offCourtMarginMeters == offCourtMarginMeters &&
+          other.minStint == minStint &&
+          other.possessionWindow == possessionWindow &&
+          other.possessionMarginMeters == possessionMarginMeters &&
+          other.minPossession == minPossession;
+
+  @override
+  int get hashCode => Object.hash(
+        onCourtInsetMeters,
+        offCourtMarginMeters,
+        minStint,
+        possessionWindow,
+        possessionMarginMeters,
+        minPossession,
+      );
+
+  @override
+  String toString() => 'PlayThresholds('
+      'stints >= ${minStint.inSeconds} s, '
+      'keeper window ${possessionWindow.inSeconds} s, '
+      'margin ${possessionMarginMeters.toStringAsFixed(2)} m)';
+}

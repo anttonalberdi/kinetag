@@ -23,13 +23,20 @@ class PlayerTrackMetrics {
 
   /// Distance divided by the tracked span.
   ///
-  /// This is mean speed over the whole recording, standing still included —
-  /// not mean speed while moving. That makes it comparable between players
-  /// in the same session and useless for comparing a bench player with a
-  /// starter, which is the honest limit of a single number.
+  /// This is mean speed over the measured time, standing still included — not
+  /// mean speed while moving. Which time is "measured" depends on what these
+  /// metrics cover: over a whole recording it includes the bench, and over the
+  /// on-court spells alone it does not. That is exactly why the split matters,
+  /// and why a figure computed over everything cannot fairly compare a
+  /// substitute with a starter.
   final double averageSpeedMps;
 
-  /// Time between the first and last sample for this tag.
+  /// Time covered by these metrics.
+  ///
+  /// For a single stretch of track that is the span from its first sample to
+  /// its last. For metrics [merged] from several stretches — the on-court
+  /// spells of a rotating player, say — it is the sum of those spans, and so
+  /// counts only the time the player was actually being measured.
   final Duration trackedDuration;
 
   final int sampleCount;
@@ -59,6 +66,74 @@ class PlayerTrackMetrics {
     required this.speedTimesMicros,
     required this.speeds,
   });
+
+  /// Metrics covering no time at all, for a tag that was never in the split
+  /// being measured — a player who never left the bench, or a team that never
+  /// attacked while this one was on court.
+  factory PlayerTrackMetrics.empty(String tagId) => PlayerTrackMetrics(
+        tagId: tagId,
+        distanceMeters: 0,
+        maxSpeedMps: 0,
+        averageSpeedMps: 0,
+        trackedDuration: Duration.zero,
+        sampleCount: 0,
+        discardedSteps: 0,
+        speedTimesMicros: const [],
+        speeds: const [],
+      );
+
+  /// Several disjoint stretches of one tag's track, added together.
+  ///
+  /// This is what makes a statistic scoped to *when* rather than to the whole
+  /// recording: a player's on-court metrics are the metrics of their stints
+  /// merged, and their attacking metrics are the metrics of the parts of those
+  /// stints their team spent attacking.
+  ///
+  /// Only the sums are meaningful to add; the rest are recombined as their
+  /// meaning requires. Distance and measured time add, the maximum is the
+  /// largest of the maxima, and average speed is recomputed from the two sums
+  /// rather than averaged — averaging averages would weigh a ten-second stint
+  /// as heavily as a ten-minute one.
+  ///
+  /// [parts] must be in time order, which they are by construction: they come
+  /// from an interval list that is itself ordered.
+  factory PlayerTrackMetrics.merged(
+    String tagId,
+    Iterable<PlayerTrackMetrics> parts,
+  ) {
+    var distance = 0.0;
+    var maxSpeed = 0.0;
+    var micros = 0;
+    var samples = 0;
+    var discarded = 0;
+    final speedTimes = <int>[];
+    final speeds = <double>[];
+
+    for (final part in parts) {
+      distance += part.distanceMeters;
+      maxSpeed = math.max(maxSpeed, part.maxSpeedMps);
+      micros += part.trackedDuration.inMicroseconds;
+      samples += part.sampleCount;
+      discarded += part.discardedSteps;
+      speedTimes.addAll(part.speedTimesMicros);
+      speeds.addAll(part.speeds);
+    }
+
+    return PlayerTrackMetrics(
+      tagId: tagId,
+      distanceMeters: distance,
+      maxSpeedMps: maxSpeed,
+      averageSpeedMps: micros <= 0 ? 0.0 : distance / (micros / 1e6),
+      trackedDuration: Duration(microseconds: micros),
+      sampleCount: samples,
+      discardedSteps: discarded,
+      speedTimesMicros: speedTimes,
+      speeds: speeds,
+    );
+  }
+
+  /// Whether any time at all was measured.
+  bool get isEmpty => sampleCount == 0;
 
   /// Instantaneous speed in force at [timestampMicros], in m/s.
   ///
@@ -113,23 +188,43 @@ class SessionMetrics {
     Iterable<PositionSample> samples, {
     AnalyticsThresholds thresholds = AnalyticsThresholds.defaults,
   }) {
-    final byTag = <String, List<PositionSample>>{};
-    for (final sample in samples) {
-      // Low-confidence fixes are dropped before anything is derived from
-      // them: a bad position is worse than a missing one, because the gap it
-      // leaves is bridged by the next accepted sample while the bad fix would
-      // be integrated into the distance total.
-      if (sample.confidence < thresholds.minConfidence) continue;
-      (byTag[sample.tagId] ??= []).add(sample);
-    }
+    final byTag = groupByTag(samples, thresholds: thresholds);
 
     return SessionMetrics(
       {
         for (final entry in byTag.entries)
-          entry.key: _metricsForTrack(entry.key, entry.value, thresholds),
+          entry.key: forTrack(entry.key, entry.value, thresholds: thresholds),
       },
       thresholds: thresholds,
     );
+  }
+
+  /// Splits [samples] per tag, dropping the ones no figure should be derived
+  /// from and sorting what remains into time order.
+  ///
+  /// Public because every analysis that goes beyond a single number — where
+  /// the time was spent, when a player was on court, which way their team was
+  /// playing — starts from the same per-tag tracks, and each of them redoing
+  /// the grouping would mean walking the largest list in the app several times
+  /// over.
+  ///
+  /// Low-confidence fixes are dropped here, before anything is derived from
+  /// them: a bad position is worse than a missing one, because the gap it
+  /// leaves is bridged by the next accepted sample while the bad fix would be
+  /// integrated into the distance total.
+  static Map<String, List<PositionSample>> groupByTag(
+    Iterable<PositionSample> samples, {
+    AnalyticsThresholds thresholds = AnalyticsThresholds.defaults,
+  }) {
+    final byTag = <String, List<PositionSample>>{};
+    for (final sample in samples) {
+      if (sample.confidence < thresholds.minConfidence) continue;
+      (byTag[sample.tagId] ??= []).add(sample);
+    }
+    for (final track in byTag.values) {
+      track.sort((a, b) => a.timestampMicros.compareTo(b.timestampMicros));
+    }
+    return byTag;
   }
 
   /// Computes metrics from frames, the shape replay already holds.
@@ -156,11 +251,18 @@ class SessionMetrics {
 
   bool get isEmpty => byTagId.isEmpty;
 
-  static PlayerTrackMetrics _metricsForTrack(
+  /// Metrics for one uninterrupted, time-ordered stretch of a tag's track.
+  ///
+  /// Public so that a stretch can be chosen by something other than "all of
+  /// it" — an on-court stint, or the part of one spent attacking — and
+  /// measured on exactly the same arithmetic as the whole recording is.
+  /// Combine the results with [PlayerTrackMetrics.merged].
+  static PlayerTrackMetrics forTrack(
     String tagId,
-    List<PositionSample> track,
-    AnalyticsThresholds thresholds,
-  ) {
+    List<PositionSample> track, {
+    AnalyticsThresholds thresholds = AnalyticsThresholds.defaults,
+  }) {
+    if (track.isEmpty) return PlayerTrackMetrics.empty(tagId);
     track.sort((a, b) => a.timestampMicros.compareTo(b.timestampMicros));
 
     final maxPlausibleSpeedMps = thresholds.maxPlausibleSpeedMps;

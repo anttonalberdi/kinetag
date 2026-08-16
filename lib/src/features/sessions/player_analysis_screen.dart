@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../analytics/play_metrics.dart';
 import '../../analytics/session_metrics.dart';
 import '../../analytics/speed_zones.dart';
 import '../../analytics/team_metrics.dart';
@@ -61,7 +62,7 @@ class PlayerAnalysisScreen extends ConsumerWidget {
 
     if (session == null) return const SizedBox.shrink();
 
-    final metrics = ref.watch(sessionTeamMetricsProvider);
+    final metrics = ref.watch(splitTeamMetricsProvider);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
@@ -104,12 +105,15 @@ class PlayerAnalysisScreen extends ConsumerWidget {
   ) {
     final theme = Theme.of(context);
     final navigator = ref.read(sessionViewProvider.notifier);
+    final split = ref.watch(playSplitProvider);
+    final play = ref.watch(sessionPlayMetricsProvider).value;
 
     // The tag can be missing from the metrics when every one of its samples
     // was rejected by the confidence threshold — saying so beats an empty
     // chart.
     final track = _trackFor(metrics);
-    if (track == null) {
+    final player = play?.forTag(tagId);
+    if (track == null || play == null || player == null) {
       return Center(
         child: Text(
           'No usable samples were recorded for this player.',
@@ -127,7 +131,10 @@ class PlayerAnalysisScreen extends ConsumerWidget {
     final intensity = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SectionTitle(title: 'Time by intensity'),
+        SectionTitle(
+          title: 'Time by intensity',
+          description: 'While ${split.label.toLowerCase()}.',
+        ),
         const SizedBox(height: 8),
         ZoneBreakdownBar(breakdown: zones, color: color),
       ],
@@ -150,9 +157,34 @@ class PlayerAnalysisScreen extends ConsumerWidget {
               : null,
         ),
         const Divider(height: 24),
-        _StatTiles(track: track, squad: metrics),
+        PlaySplitSelector(phasesAvailable: play.hasPhases),
+        const SizedBox(height: 16),
+        _StatTiles(
+          track: track,
+          squad: metrics,
+          player: player,
+          split: split,
+          sessionDuration: play.sessionDuration,
+          // The playhead reads from the whole recording, not from the split:
+          // scrubbing to a moment the player spent on the bench should show
+          // what they were doing then, not the last speed of their last stint.
+          whole: player.forSplit(PlaySplit.all),
+        ),
         const SizedBox(height: 20),
-        _FigurePreviews(tagId: tagId, track: track, color: color, team: team),
+        _FigurePreviews(
+          tagId: tagId,
+          track: player.forSplit(PlaySplit.all),
+          color: color,
+          team: team,
+        ),
+        const SizedBox(height: 20),
+        _TimeOnCourt(
+          player: player,
+          sessionDuration: play.sessionDuration,
+          color: color,
+        ),
+        const SizedBox(height: 20),
+        _PhaseSplit(player: player, hasPhases: play.hasPhases, color: color),
         const SizedBox(height: 20),
         if (isWide)
           Row(
@@ -170,7 +202,7 @@ class PlayerAnalysisScreen extends ConsumerWidget {
         ],
         const SizedBox(height: 16),
         Text(
-          'Computed under ${metrics.thresholds}.',
+          'Computed under ${metrics.thresholds} and ${play.playThresholds}.',
           style: theme.textTheme.bodySmall
               ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
         ),
@@ -183,6 +215,262 @@ class PlayerAnalysisScreen extends ConsumerWidget {
       if (track.tagId == tagId) return track;
     }
     return null;
+  }
+}
+
+/// How much of the session this player actually played.
+///
+/// The absolute figure and the share sit next to each other deliberately.
+/// Time on court is the number every other figure on this page should be read
+/// against — a distance is only impressive once you know it was covered in
+/// eight minutes rather than forty — and neither reading alone establishes
+/// that.
+class _TimeOnCourt extends StatelessWidget {
+  final PlayerPlayMetrics player;
+  final Duration sessionDuration;
+  final Color color;
+
+  const _TimeOnCourt({
+    required this.player,
+    required this.sessionDuration,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final share = player.onCourtShareOf(sessionDuration);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionTitle(
+          title: 'Time on court',
+          description: player.stintCount <= 1
+              ? 'One stint.'
+              : '${player.stintCount} stints, so every total below is the sum '
+                  'of them.',
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: [
+            StatTile(
+              label: 'Played',
+              value: formatElapsed(player.onCourtDuration),
+              hint: '${formatShare(share)} of the '
+                  '${formatElapsed(sessionDuration)} session',
+              emphasised: true,
+            ),
+            StatTile(
+              label: 'On the bench',
+              value: formatElapsed(player.benchDuration),
+              hint: player.benchDuration == Duration.zero
+                  ? 'Never left the court'
+                  : 'Excluded from every figure below',
+            ),
+            StatTile(
+              label: 'Stints',
+              value: '${player.stintCount}',
+              hint: player.stintCount <= 1
+                  ? 'Never substituted'
+                  : 'Times they came on',
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        TimeBreakdownBar(
+          total: sessionDuration,
+          parts: [
+            TimeShare(
+              label: 'On court',
+              duration: player.onCourtDuration,
+              color: color,
+            ),
+            TimeShare(
+              label: 'Bench',
+              duration: player.benchDuration,
+              color: color.withValues(alpha: 0.35),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// This player's playing time divided between attacking and defending, and
+/// what they did in each.
+///
+/// Side by side rather than as a split selector, because the interesting thing
+/// about the two is the difference: a back who covers half again as much
+/// ground defending as attacking is telling you something a coach can act on,
+/// and that comparison disappears if the reader has to toggle between them.
+class _PhaseSplit extends StatelessWidget {
+  final PlayerPlayMetrics player;
+  final bool hasPhases;
+  final Color color;
+
+  const _PhaseSplit({
+    required this.player,
+    required this.hasPhases,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    if (!hasPhases || !player.hasPhaseSplit) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SectionTitle(title: 'Attack and defence'),
+          const SizedBox(height: 6),
+          Text(
+            player.side == null
+                ? 'This player has no side on the roster, so there is no end '
+                    'for them to be attacking.'
+                : 'Which way play was going could not be established: it is '
+                    'read from how far each goalkeeper stands off their own '
+                    'line, and this session has no tracked goalkeeper.',
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+        ],
+      );
+    }
+
+    final attacking = player.forSplit(PlaySplit.attacking);
+    final defending = player.forSplit(PlaySplit.defending);
+    final unclear = player.forSplit(PlaySplit.unclear);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SectionTitle(
+          title: 'Attack and defence',
+          description: 'Their playing time divided by which way their team '
+              'was playing.',
+        ),
+        const SizedBox(height: 10),
+        TimeBreakdownBar(
+          total: player.onCourtDuration,
+          parts: [
+            TimeShare(
+              label: 'Attacking',
+              duration: attacking.trackedDuration,
+              color: color,
+            ),
+            TimeShare(
+              label: 'Defending',
+              duration: defending.trackedDuration,
+              color: color.withValues(alpha: 0.45),
+            ),
+            if (unclear.trackedDuration > Duration.zero)
+              TimeShare(
+                label: 'Unclear',
+                duration: unclear.trackedDuration,
+                color: theme.colorScheme.outlineVariant,
+              ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        _PhaseTable(attacking: attacking, defending: defending),
+      ],
+    );
+  }
+}
+
+/// The same four figures for attacking and for defending, so the pair can be
+/// read across rather than looked up twice.
+class _PhaseTable extends StatelessWidget {
+  final PlayerTrackMetrics attacking;
+  final PlayerTrackMetrics defending;
+
+  const _PhaseTable({required this.attacking, required this.defending});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    String rate(PlayerTrackMetrics track) {
+      final minutes = track.trackedDuration.inMicroseconds / 6e7;
+      return formatMetresPerMinute(
+        minutes <= 0 ? 0 : track.distanceMeters / minutes,
+      );
+    }
+
+    final rows = <(String, String, String)>[
+      (
+        'Time',
+        formatElapsed(attacking.trackedDuration),
+        formatElapsed(defending.trackedDuration),
+      ),
+      (
+        'Distance',
+        formatMetres(attacking.distanceMeters),
+        formatMetres(defending.distanceMeters),
+      ),
+      ('Work rate', rate(attacking), rate(defending)),
+      (
+        'Top speed',
+        formatSpeed(attacking.maxSpeedMps),
+        formatSpeed(defending.maxSpeedMps),
+      ),
+      (
+        'Average speed',
+        formatSpeed(attacking.averageSpeedMps),
+        formatSpeed(defending.averageSpeedMps),
+      ),
+    ];
+
+    Widget cell(String text, {bool heading = false}) => Expanded(
+          child: Text(
+            text,
+            textAlign: TextAlign.right,
+            style: heading
+                ? theme.textTheme.labelSmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)
+                : theme.textTheme.bodyMedium?.copyWith(
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+          ),
+        );
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              const Expanded(flex: 2, child: SizedBox.shrink()),
+              cell('ATTACKING', heading: true),
+              cell('DEFENDING', heading: true),
+            ],
+          ),
+          const SizedBox(height: 4),
+          for (final (label, attack, defend) in rows)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    flex: 2,
+                    child: Text(label, style: theme.textTheme.bodyMedium),
+                  ),
+                  cell(attack),
+                  cell(defend),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }
 
@@ -350,22 +638,42 @@ class _Header extends StatelessWidget {
 }
 
 class _StatTiles extends ConsumerWidget {
+  /// The player's metrics for the selected split — what every figure here
+  /// except the playhead is measured over.
   final PlayerTrackMetrics track;
-  final SessionTeamMetrics squad;
 
-  const _StatTiles({required this.track, required this.squad});
+  /// The same player over the whole recording, for the playhead alone.
+  final PlayerTrackMetrics whole;
+
+  final SessionTeamMetrics squad;
+  final PlayerPlayMetrics player;
+  final PlaySplit split;
+  final Duration sessionDuration;
+
+  const _StatTiles({
+    required this.track,
+    required this.whole,
+    required this.squad,
+    required this.player,
+    required this.split,
+    required this.sessionDuration,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final playheadMicros = ref.watch(
       replayControllerProvider.select((s) => s.frame?.timestampMicros),
     );
-    final now = playheadMicros == null ? 0.0 : track.speedAt(playheadMicros);
+    final now = playheadMicros == null ? 0.0 : whole.speedAt(playheadMicros);
 
     final squadTotal = squad.totalDistanceMeters;
     final share = squadTotal <= 0 ? 0.0 : track.distanceMeters / squadTotal;
     final sprint = (squad.zonesByTag[track.tagId] ?? const SpeedZoneBreakdown({}))
         .inZone(SpeedZone.sprinting);
+
+    final measured = player.durationOf(split);
+    final minutes = measured.inMicroseconds / 6e7;
+    final rate = minutes <= 0 ? 0.0 : track.distanceMeters / minutes;
 
     return Wrap(
       spacing: 12,
@@ -375,6 +683,11 @@ class _StatTiles extends ConsumerWidget {
           label: 'Distance',
           value: formatMetres(track.distanceMeters),
           hint: '${formatShare(share)} of the squad total',
+        ),
+        StatTile(
+          label: 'Work rate',
+          value: formatMetresPerMinute(rate),
+          hint: 'Per minute ${split.label.toLowerCase()}',
         ),
         StatTile(
           label: 'Top speed',
@@ -397,10 +710,17 @@ class _StatTiles extends ConsumerWidget {
           value: formatElapsed(sprint),
           hint: '≥ ${SpeedZone.sprinting.lowerBoundMps.toStringAsFixed(1)} m/s',
         ),
+        // Both readings of the same time, side by side: the clock figure a
+        // coach compares between players, and the share that says whether it
+        // was most of the match or a cameo.
         StatTile(
-          label: 'Tracked',
-          value: formatElapsed(track.trackedDuration),
-          hint: '${track.sampleCount} samples',
+          label: split.label,
+          value: formatElapsed(measured),
+          hint: sessionDuration <= Duration.zero
+              ? '${track.sampleCount} samples'
+              : '${formatShare(
+                  measured.inMicroseconds / sessionDuration.inMicroseconds,
+                )} of the session',
         ),
         StatTile(
           label: 'Discarded steps',

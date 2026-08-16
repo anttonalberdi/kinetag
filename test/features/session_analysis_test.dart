@@ -126,6 +126,10 @@ void main() {
       expect(find.text('9.0 m'), findsOneWidget);
       expect(find.textContaining('of 2 by distance'), findsOneWidget);
       expect(find.text('Speed over time'), findsOneWidget);
+
+      // The intensity split sits below the time sections the page gained, so
+      // it is reached by scrolling rather than on arrival.
+      await tester.scrollUntilVisible(find.text('Time by intensity'), 200);
       expect(find.text('Time by intensity'), findsOneWidget);
       expect(find.textContaining('Sprinting 100%'), findsOneWidget);
 
@@ -213,6 +217,11 @@ void main() {
       // directly has no room beside the court at this width.
       await pumpReplay(tester, size: const Size(420, 780));
       await openPlayerFromTable(tester, 'Player 0');
+
+      // Both figures are below the fold at this width; scrolling to the lower
+      // one leaves the pair built and measurable.
+      await tester.scrollUntilVisible(find.byType(SpeedChart), 200);
+      await tester.pumpAndSettle();
 
       final map = tester.getRect(find.byType(PlayerHeatmapCard));
       final chart = tester.getRect(find.byType(SpeedChart));
@@ -306,7 +315,10 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(SessionAnalysisScreen), findsOneWidget);
-      expect(find.text('Session totals'), findsOneWidget);
+      // Game time comes first, then the totals — which are scoped to playing
+      // time by default, and say so.
+      expect(find.text('Game time'), findsOneWidget);
+      expect(find.text('Totals — on court'), findsOneWidget);
       expect(find.text('18.0 m'), findsOneWidget, reason: 'squad total');
       expect(find.text('2'), findsWidgets, reason: 'players tracked');
 
@@ -365,9 +377,12 @@ void main() {
 
       final homeCard =
           find.ancestor(of: find.text('Home'), matching: find.byType(Card));
-      await tester.tap(
-        find.descendant(of: homeCard, matching: find.byType(CourtHeatmap)),
-      );
+      final homeMap =
+          find.descendant(of: homeCard, matching: find.byType(CourtHeatmap));
+      await tester.scrollUntilVisible(homeMap, 200);
+      await tester.pumpAndSettle();
+
+      await tester.tap(homeMap);
       await tester.pumpAndSettle();
 
       // The team's own map opens first, with the players behind it offered

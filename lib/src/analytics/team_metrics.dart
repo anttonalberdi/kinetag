@@ -65,6 +65,35 @@ class TeamMetrics {
 
   double get maxSpeedMps => fastest?.maxSpeedMps ?? 0;
 
+  /// Every player's measured time added together — player-minutes, not
+  /// minutes.
+  ///
+  /// Which time that is depends on the split the team was built for: over a
+  /// whole recording it counts the bench, and over playing time it does not.
+  /// A side of six on court for ten minutes reports sixty player-minutes.
+  Duration get measuredDuration => Duration(
+        microseconds: tracks.fold(
+          0,
+          (sum, track) => sum + track.trackedDuration.inMicroseconds,
+        ),
+      );
+
+  /// Measured time per player: the figure that is comparable between squads of
+  /// different sizes, which [measuredDuration] is not.
+  Duration get averageDuration => tracks.isEmpty
+      ? Duration.zero
+      : Duration(microseconds: measuredDuration.inMicroseconds ~/ tracks.length);
+
+  /// Distance covered per minute measured.
+  ///
+  /// The rate is what survives a substitution: two players who split a match
+  /// between them each cover half the distance of one who played it all, and
+  /// only per-minute figures say whether either was working harder.
+  double get metresPerMinute {
+    final minutes = measuredDuration.inMicroseconds / 6e7;
+    return minutes <= 0 ? 0 : totalDistanceMeters / minutes;
+  }
+
   bool contains(String tagId) => tracks.any((track) => track.tagId == tagId);
 }
 
@@ -102,8 +131,27 @@ class SessionTeamMetrics {
   factory SessionTeamMetrics.from({
     required SessionMetrics metrics,
     required Session session,
+  }) =>
+      SessionTeamMetrics.fromTracks(
+        tracks: metrics.byDistance,
+        session: session,
+        thresholds: metrics.thresholds,
+      );
+
+  /// Groups an arbitrary set of per-player metrics by team.
+  ///
+  /// Separate from [SessionTeamMetrics.from] because the tracks need not be
+  /// whole-recording ones: hand it a `PlaySplit`'s worth of metrics and the
+  /// same report comes back scoped to playing time, or to attacking, or to
+  /// defending. The grouping is identical either way — it is a property of the
+  /// roster, not of the window being measured.
+  factory SessionTeamMetrics.fromTracks({
+    required Iterable<PlayerTrackMetrics> tracks,
+    required Session session,
+    AnalyticsThresholds thresholds = AnalyticsThresholds.defaults,
   }) {
-    final ranked = metrics.byDistance;
+    final ranked = tracks.toList()
+      ..sort((a, b) => b.distanceMeters.compareTo(a.distanceMeters));
     final zonesByTag = {
       for (final track in ranked)
         track.tagId: SpeedZoneBreakdown.fromTrack(track),
@@ -153,7 +201,7 @@ class SessionTeamMetrics {
       ],
       ranked: ranked,
       zonesByTag: zonesByTag,
-      thresholds: metrics.thresholds,
+      thresholds: thresholds,
     );
   }
 
@@ -177,6 +225,21 @@ class SessionTeamMetrics {
     Duration.zero,
     (sum, breakdown) => sum + breakdown.inZone(zone),
   );
+
+  /// Every tracked player's measured time added together — player-minutes,
+  /// not minutes. See [TeamMetrics.measuredDuration].
+  Duration get measuredDuration => Duration(
+        microseconds: ranked.fold(
+          0,
+          (sum, track) => sum + track.trackedDuration.inMicroseconds,
+        ),
+      );
+
+  /// Ground covered per minute measured, across everybody.
+  double get metresPerMinute {
+    final minutes = measuredDuration.inMicroseconds / 6e7;
+    return minutes <= 0 ? 0 : totalDistanceMeters / minutes;
+  }
 
   /// The longest span any one tag was tracked for — the closest thing to
   /// "how long the session ran" that is derived from the samples themselves.

@@ -1,20 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../analytics/analytics_providers.dart';
-import '../../analytics/session_metrics.dart';
+import '../../analytics/play_metrics.dart';
+import '../../core/duration_format.dart';
 import '../../core/metric_format.dart';
 import '../court/tag_roster.dart';
 import 'analysis_navigation.dart';
+import 'analysis_providers.dart';
 import 'replay_controller.dart';
 import 'replay_screen.dart';
 
 /// Per-player movement metrics for the session being replayed.
 ///
-/// Distance, maximum and average speed come from the whole recording;
-/// "now" is the speed in force at the playhead, so scrubbing to a sprint
-/// shows the sprint. Everything is derived from the stored samples on
-/// demand — nothing here is a stored figure that could go stale.
+/// Distance, maximum and average speed cover the time each player was on
+/// court, matching the analysis pages exactly — a coach who reads 4.8 km here
+/// and 5.2 km two taps away has no way to tell which is wrong. "Now" is the
+/// one exception: it reads the whole recording, because scrubbing to a moment
+/// a player spent on the bench should show what they were doing then rather
+/// than the last speed of their last stint.
+///
+/// Everything is derived from the stored samples on demand — nothing here is a
+/// stored figure that could go stale.
 class PlayerMetricsPanel extends ConsumerWidget {
   const PlayerMetricsPanel({super.key});
 
@@ -26,7 +32,7 @@ class PlayerMetricsPanel extends ConsumerWidget {
 
     if (session == null) return const SizedBox.shrink();
 
-    final metrics = ref.watch(sessionMetricsProvider(session.id));
+    final metrics = ref.watch(sessionPlayMetricsProvider);
     final roster = ref.watch(replayRosterProvider);
     final playheadMicros = ref.watch(
       replayControllerProvider.select((s) => s.frame?.timestampMicros),
@@ -43,8 +49,8 @@ class PlayerMetricsPanel extends ConsumerWidget {
             Text('Movement', style: theme.textTheme.titleMedium),
             const SizedBox(height: 2),
             Text(
-              'Distance • max / avg / now speed. '
-              'Select a player for their own page.',
+              'Time on court, distance • max / avg / now speed. '
+              'Bench time excluded. Select a player for their own page.',
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
@@ -65,14 +71,14 @@ class PlayerMetricsPanel extends ConsumerWidget {
                       )
                     : ListView(
                         children: [
-                          for (final track in metrics.byDistance)
+                          for (final player in _ranked(metrics))
                             _MetricRow(
-                              entry: roster.entryFor(track.tagId),
-                              track: track,
+                              entry: roster.entryFor(player.tagId),
+                              player: player,
                               playheadMicros: playheadMicros,
                               onOpen: () => ref
                                   .read(sessionViewProvider.notifier)
-                                  .showPlayer(track.tagId),
+                                  .showPlayer(player.tagId),
                             ),
                           const SizedBox(height: 8),
                           _TotalRow(metrics: metrics),
@@ -97,15 +103,25 @@ class PlayerMetricsPanel extends ConsumerWidget {
   }
 }
 
+/// Players ranked by the ground they covered while playing.
+List<PlayerPlayMetrics> _ranked(SessionPlayMetrics metrics) =>
+    metrics.byTagId.values.toList()
+      ..sort(
+        (a, b) => b
+            .forSplit(PlaySplit.onCourt)
+            .distanceMeters
+            .compareTo(a.forSplit(PlaySplit.onCourt).distanceMeters),
+      );
+
 class _MetricRow extends StatelessWidget {
   final TagRosterEntry? entry;
-  final PlayerTrackMetrics track;
+  final PlayerPlayMetrics player;
   final int? playheadMicros;
   final VoidCallback onOpen;
 
   const _MetricRow({
     required this.entry,
-    required this.track,
+    required this.player,
     required this.playheadMicros,
     required this.onOpen,
   });
@@ -113,8 +129,10 @@ class _MetricRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final now =
-        playheadMicros == null ? 0.0 : track.speedAt(playheadMicros!);
+    final track = player.forSplit(PlaySplit.onCourt);
+    final now = playheadMicros == null
+        ? 0.0
+        : player.forSplit(PlaySplit.all).speedAt(playheadMicros!);
 
     return InkWell(
       onTap: onOpen,
@@ -138,11 +156,12 @@ class _MetricRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    entry?.playerName ?? track.tagId,
+                    entry?.playerName ?? player.tagId,
                     style: theme.textTheme.bodyMedium,
                     overflow: TextOverflow.ellipsis,
                   ),
                   Text(
+                    '${formatElapsed(player.onCourtDuration)} • '
                     '${formatMetres(track.distanceMeters)} • '
                     '${formatSpeed(track.maxSpeedMps)} / '
                     '${formatSpeed(track.averageSpeedMps)} / '
@@ -168,19 +187,24 @@ class _MetricRow extends StatelessWidget {
 }
 
 class _TotalRow extends StatelessWidget {
-  final SessionMetrics metrics;
+  final SessionPlayMetrics metrics;
 
   const _TotalRow({required this.metrics});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final total = metrics.tracksFor(PlaySplit.onCourt).fold<double>(
+          0,
+          (sum, track) => sum + track.distanceMeters,
+        );
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Text('Squad total', style: theme.textTheme.bodySmall),
         Text(
-          formatMetres(metrics.totalDistanceMeters),
+          formatMetres(total),
           style: theme.textTheme.bodySmall
               ?.copyWith(fontWeight: FontWeight.w600),
         ),
