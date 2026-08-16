@@ -33,6 +33,10 @@ class SimulatorTrackingSource implements TrackingSource {
   final int sampleRateHz;
   final int seed;
 
+  /// How often each side exchanges a field player with a substitute; zero
+  /// keeps the starting line-up on for the whole connection.
+  final Duration substitutionInterval;
+
   /// Injectable wall clock, so tests can pin the recording's start instant.
   final DateTime Function() _clock;
 
@@ -53,6 +57,7 @@ class SimulatorTrackingSource implements TrackingSource {
     SimulatedSquad? squad,
     this.sampleRateHz = defaultSampleRateHz,
     this.seed = 20260816,
+    this.substitutionInterval = MatchSimulation.defaultSubstitutionInterval,
     DateTime Function()? clock,
   })  : assert(sampleRateHz > 0, 'sampleRateHz must be positive'),
         squad = squad ?? SimulatedSquad.handballTeams(),
@@ -82,7 +87,12 @@ class SimulatorTrackingSource implements TrackingSource {
     _frameIndex = 0;
     _emitStatus(TrackingSourceStatus.connecting);
 
-    _simulation = MatchSimulation(court: court, squad: squad, seed: seed);
+    _simulation = MatchSimulation(
+      court: court,
+      squad: squad,
+      seed: seed,
+      substitutionInterval: substitutionInterval,
+    );
     _startMicros = _clock().toUtc().microsecondsSinceEpoch;
     _timer = Timer.periodic(
       Duration(microseconds: framePeriodMicros),

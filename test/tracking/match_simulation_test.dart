@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kinetag/src/domain/domain.dart';
 import 'package:kinetag/src/tracking/simulator/match_simulation.dart';
+import 'package:kinetag/src/tracking/simulator/role_movement.dart';
 import 'package:kinetag/src/tracking/simulator/simulated_squad.dart';
 
 const int _twentyHzMicros = 50000;
@@ -227,13 +228,94 @@ void main() {
     });
   });
 
+  group('the goal areas', () {
+    final goalArea = GoalArea(court);
+
+    test('nobody but the goalkeepers ever enters one', () {
+      // A rule, not a tendency: an outfield player standing in the 6 m zone is
+      // a free throw against, so a simulated match must not produce one.
+      final squad = SimulatedSquad.handballTeams();
+      final frames = run(
+        MatchSimulation(court: court, squad: squad, seed: 29),
+        180,
+      );
+
+      final outfield = squad.participants
+          .where((p) => p.role != PlayerRole.goalkeeper)
+          .map((p) => p.tagId)
+          .toSet();
+
+      for (final frame in frames) {
+        for (final sample in frame.samples) {
+          if (!outfield.contains(sample.tagId)) continue;
+          expect(
+            goalArea.contains(sample.x, sample.y),
+            isFalse,
+            reason: '${sample.tagId} stood in a goal area at '
+                '(${sample.x.toStringAsFixed(2)}, '
+                '${sample.y.toStringAsFixed(2)})',
+          );
+        }
+      }
+    });
+
+    test('the goalkeepers do stand in theirs', () {
+      // The exclusion must not be so eager that it empties the goal as well:
+      // a keeper who never stood on their own line would be no keeper.
+      final squad = SimulatedSquad.handballTeams();
+      final frames = run(
+        MatchSimulation(court: court, squad: squad, seed: 31),
+        60,
+      );
+
+      for (final keeper
+          in squad.participants.where((p) => p.role == PlayerRole.goalkeeper)) {
+        final track = trackOf(frames, keeper.tagId);
+        expect(
+          track.any((s) => goalArea.contains(s.x, s.y)),
+          isTrue,
+          reason: '${keeper.side.displayName} keeper never kept goal',
+        );
+      }
+    });
+
+    test('play still reaches the edge of the zone', () {
+      // Held out of the area, not held away from it: an attack that stopped
+      // ten metres out would make the exclusion cost more than it is worth.
+      final squad = SimulatedSquad.handballTeams();
+      final frames = run(
+        MatchSimulation(court: court, squad: squad, seed: 37),
+        120,
+      );
+
+      final outfield = squad.participants
+          .where((p) => p.role != PlayerRole.goalkeeper)
+          .map((p) => p.tagId)
+          .toSet();
+
+      final approached = [
+        for (final frame in frames)
+          for (final sample in frame.samples)
+            if (outfield.contains(sample.tagId) &&
+                goalArea.contains(sample.x, sample.y, margin: 1.5))
+              sample,
+      ];
+      expect(approached, isNotEmpty,
+          reason: 'nobody came within 1.5 m of a goal area all match');
+    });
+  });
+
   group('the bench', () {
     /// A 1 + 4 line-up out of the default six, so one substitute per side
     /// sits: the goalkeeper and four field players play, the pivot waits.
+    ///
+    /// Rotation off, because these are about what a bench *is*; what happens
+    /// when it turns over is the group below.
     MatchSimulation benchedSimulation() => MatchSimulation(
           court: court,
           squad: SimulatedSquad.handballTeams(fieldPlayersOnCourt: 4),
           seed: 7,
+          substitutionInterval: Duration.zero,
         );
 
     test('seats sit half a metre outside a sideline, one side per team', () {
@@ -319,6 +401,215 @@ void main() {
         }
         expect(distance, greaterThan(5.0),
             reason: '${participant.tagId} should be moving');
+      }
+    });
+  });
+
+  group('substitutions', () {
+    /// A 1 + 4 line-up out of the default six — five on court per side, the
+    /// pivot on the bench — rotating every half minute, so a couple of minutes
+    /// of simulated match contains several exchanges.
+    MatchSimulation rotatingSimulation({
+      int seed = 7,
+      Duration every = const Duration(seconds: 30),
+    }) =>
+        MatchSimulation(
+          court: court,
+          squad: SimulatedSquad.handballTeams(fieldPlayersOnCourt: 4),
+          seed: seed,
+          substitutionInterval: every,
+        );
+
+    /// Whether a sample is on the floor of play, as opposed to on its way to
+    /// or from the bench outside the sideline.
+    bool onPlayingSurface(PositionSample sample) =>
+        sample.x >= 0 &&
+        sample.x <= court.widthMeters &&
+        sample.y >= 0 &&
+        sample.y <= court.heightMeters;
+
+    List<PositionSample> forSide(PositionFrame frame, SimulatedSquad squad,
+            TeamSide side) =>
+        [
+          for (final sample in frame.samples)
+            if (squad.participantForTag(sample.tagId)!.side == side) sample,
+        ];
+
+    test('a substitute comes on and the player they replace goes off', () {
+      final simulation = rotatingSimulation();
+      final substitute = simulation.squad.benched.first;
+      final starters = simulation.squad.onCourt.toList();
+
+      expect(simulation.isOnCourt(substitute.tagId), isFalse);
+
+      run(simulation, 60);
+
+      expect(simulation.isOnCourt(substitute.tagId), isTrue,
+          reason: 'the bench never emptied');
+      expect(
+        starters.where((p) => !simulation.isOnCourt(p.tagId)),
+        isNotEmpty,
+        reason: 'somebody must have made room',
+      );
+    });
+
+    test('the substitute waits until their team-mate is off the court', () {
+      // The requirement the whole handover exists for: a side that briefly had
+      // both of them on would be playing a player up, and every team metric
+      // over that window — count, centroid, width — would be wrong.
+      final simulation = rotatingSimulation(seed: 19);
+      final squad = simulation.squad;
+      final frames = run(simulation, 180);
+
+      for (final frame in frames) {
+        for (final side in TeamSide.values) {
+          final playing =
+              forSide(frame, squad, side).where(onPlayingSurface).length;
+          expect(playing, lessThanOrEqualTo(5),
+              reason: '${side.displayName} fielded an extra player');
+        }
+      }
+    });
+
+    test('a side is briefly a player short while the exchange happens', () {
+      // The other half of the same guarantee: if the count never dipped, the
+      // "walk off first" sequencing would be decorative and the test above
+      // would pass on a simulation that swapped the two instantaneously.
+      final simulation = rotatingSimulation(seed: 19);
+      final squad = simulation.squad;
+      final frames = run(simulation, 180);
+
+      final shortHanded = [
+        for (final frame in frames)
+          for (final side in TeamSide.values)
+            if (forSide(frame, squad, side).where(onPlayingSurface).length < 5)
+              side,
+      ];
+      expect(shortHanded, isNotEmpty);
+    });
+
+    test('the player who came off ends up standing at a bench seat', () {
+      final simulation = rotatingSimulation(seed: 23);
+      // Stopped between two exchanges rather than on one, so nobody is caught
+      // mid-walk: what is being checked is where they end up, not how long the
+      // walk takes.
+      final frames = run(simulation, 110);
+
+      final seated = simulation.squad.participants
+          .where((p) => !simulation.isOnCourt(p.tagId));
+      expect(seated, isNotEmpty);
+
+      for (final participant in seated) {
+        final last = trackOf(frames, participant.tagId).last;
+        final seats = [
+          for (var seat = 0; seat < simulation.squad.length; seat++)
+            simulation.benchSeatAt(participant.side, seat),
+        ];
+        expect(
+          seats.any((s) =>
+              (s.$1 - last.x).abs() < MatchSimulation.benchArrivalMeters &&
+              (s.$2 - last.y).abs() < MatchSimulation.benchArrivalMeters),
+          isTrue,
+          reason: '${participant.tagId} is off but not at the bench',
+        );
+      }
+    });
+
+    test('a substitute who comes on plays, and at their new role’s pace', () {
+      final simulation = rotatingSimulation(seed: 41);
+      final substitute = simulation.squad.benched.first;
+      final frames = run(simulation, 120);
+      final track = trackOf(frames, substitute.tagId);
+
+      var distance = 0.0;
+      var fastest = 0.0;
+      for (var i = 1; i < track.length; i++) {
+        distance += track[i - 1].distanceTo(track[i]);
+        fastest = math.max(fastest, track[i - 1].speedTo(track[i]));
+      }
+
+      // They walked off the bench and played, rather than sitting all match…
+      expect(distance, greaterThan(50.0));
+      // …at the speed of the slot they took over, not the bench's walking pace
+      // and not faster than any role on the court can run.
+      expect(fastest, greaterThan(RoleMovement.benched.maxSpeedMps));
+      expect(fastest, lessThanOrEqualTo(7.5 + 0.01));
+    });
+
+    test('goalkeepers are never substituted', () {
+      // A side that exchanged its keeper would have an empty goal for as long
+      // as the walk took.
+      final simulation = rotatingSimulation(seed: 43);
+      run(simulation, 180);
+
+      for (final keeper in simulation.squad.participants
+          .where((p) => p.role == PlayerRole.goalkeeper)) {
+        expect(simulation.isOnCourt(keeper.tagId), isTrue);
+      }
+    });
+
+    test('the rotation keeps its cadence, both sides at once', () {
+      final simulation = rotatingSimulation(seed: 47);
+      run(simulation, 125);
+
+      // Four windows of 30 s, two sides, minus whatever exchange was still a
+      // walk in progress when the clock stopped.
+      expect(simulation.substitutionCount, greaterThanOrEqualTo(6));
+      expect(simulation.substitutionCount, lessThanOrEqualTo(8));
+    });
+
+    test('an interval of zero leaves the starting line-up alone', () {
+      final simulation = rotatingSimulation(every: Duration.zero);
+      final substitute = simulation.squad.benched.first;
+
+      run(simulation, 180);
+
+      expect(simulation.substitutionCount, 0);
+      expect(simulation.isOnCourt(substitute.tagId), isFalse);
+    });
+
+    test('a full bench has nobody to bring on', () {
+      // Every tag in the default squad is fielded, so the rotation has nothing
+      // to do and must not manufacture something.
+      final simulation = MatchSimulation(
+        court: court,
+        squad: SimulatedSquad.handballTeams(),
+        seed: 7,
+        substitutionInterval: const Duration(seconds: 30),
+      );
+      run(simulation, 180);
+
+      expect(simulation.substitutionCount, 0);
+      for (final participant in simulation.squad.participants) {
+        expect(simulation.isOnCourt(participant.tagId), isTrue);
+      }
+    });
+
+    test('rotating players stay on the court and out of the goal areas', () {
+      // Coming on from outside the sideline is the one moment a player is
+      // legitimately off the floor; it must not become a way onto it in the
+      // wrong place.
+      final goalArea = GoalArea(court);
+      final simulation = rotatingSimulation(seed: 53);
+      final squad = simulation.squad;
+      final frames = run(simulation, 180);
+
+      for (final frame in frames) {
+        for (final sample in frame.samples) {
+          if (!onPlayingSurface(sample)) continue;
+          final participant = squad.participantForTag(sample.tagId)!;
+          if (participant.role == PlayerRole.goalkeeper) continue;
+          expect(goalArea.contains(sample.x, sample.y), isFalse);
+        }
+      }
+    });
+
+    test('the same seed replays the same rotation', () {
+      final a = run(rotatingSimulation(seed: 61), 120);
+      final b = run(rotatingSimulation(seed: 61), 120);
+
+      for (var i = 0; i < a.length; i++) {
+        expect(a[i].samples, b[i].samples);
       }
     });
   });

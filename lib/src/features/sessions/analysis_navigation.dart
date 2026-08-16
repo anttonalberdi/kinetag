@@ -28,6 +28,22 @@ final class PlayerAnalysisView extends SessionView {
   const PlayerAnalysisView(this.tagId);
 }
 
+/// One player's floor map, at a size worth reading, with the figures and the
+/// notes the player page has no room for.
+final class PlayerHeatmapView extends SessionView {
+  final String tagId;
+
+  const PlayerHeatmapView(this.tagId);
+}
+
+/// One player's speed over the whole recording, scrubbable, with the intensity
+/// split and the notes behind both.
+final class PlayerSpeedView extends SessionView {
+  final String tagId;
+
+  const PlayerSpeedView(this.tagId);
+}
+
 /// Navigation *within* an open session.
 ///
 /// Deliberately not a `Navigator` route stack: the whole app keeps its
@@ -44,6 +60,10 @@ class SessionViewNavigator extends Notifier<SessionView> {
   void showTeamAnalysis() => state = const TeamAnalysisView();
 
   void showPlayer(String tagId) => state = PlayerAnalysisView(tagId);
+
+  void showPlayerHeatmap(String tagId) => state = PlayerHeatmapView(tagId);
+
+  void showPlayerSpeed(String tagId) => state = PlayerSpeedView(tagId);
 }
 
 final sessionViewProvider =

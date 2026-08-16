@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../analytics/analytics_thresholds.dart';
+import '../../core/duration_format.dart';
 import '../../tracking/simulator/simulated_squad.dart';
 import '../live/live_controller.dart';
 import 'app_settings.dart';
@@ -79,8 +80,8 @@ class SettingsScreen extends ConsumerWidget {
             const SizedBox(height: 20),
             _SettingsSection(
               title: 'Line-up',
-              description: 'How many players each side fields. Applies to the '
-                  'next connection.',
+              description: 'How many players each side fields, and how often '
+                  'they change. Applies to the next connection.',
               children: [
                 _SettingSegments(
                   label: 'Players on court',
@@ -97,6 +98,33 @@ class SettingsScreen extends ConsumerWidget {
                           'a substitute covers no ground, which is what makes '
                           'them tell apart in the analytics.',
                   onChanged: controller.setFieldPlayersOnCourt,
+                ),
+                _SettingSlider(
+                  label: 'Substitution interval',
+                  valueLabel: settings.substitutesRotate
+                      ? formatElapsed(settings.substitutionInterval)
+                      : 'Off',
+                  value: settings.substitutionIntervalSeconds.toDouble(),
+                  min: AppSettings.substitutionOffSeconds.toDouble(),
+                  max: AppSettings.maxSubstitutionIntervalSeconds.toDouble(),
+                  // One stop per 15 s, with "off" at the bottom of the scale.
+                  divisions:
+                      AppSettings.maxSubstitutionIntervalSeconds ~/
+                          AppSettings.minSubstitutionIntervalSeconds,
+                  enabled: !isRecording,
+                  description: isRecording
+                      ? 'Locked while recording: the rotation is part of the '
+                          'simulation, and restarting it would cut the open '
+                          'session in half.'
+                      : 'How often each side swaps its longest-serving field '
+                          'player for its longest-waiting substitute. The '
+                          'player coming off walks to the bench first and only '
+                          'then does the substitute step on, so a side is '
+                          'never briefly seven strong. A side with nobody on '
+                          'the bench has nothing to swap; at Off, whoever '
+                          'starts plays the whole session.',
+                  onChanged: (v) =>
+                      controller.setSubstitutionIntervalSeconds(v.round()),
                 ),
               ],
             ),

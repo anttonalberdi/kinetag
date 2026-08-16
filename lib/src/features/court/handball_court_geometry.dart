@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:ui';
 
 import '../../domain/court.dart';
+import '../../domain/goal_area.dart';
 
 /// Handball court markings expressed as paths in **world coordinates
 /// (metres)**.
@@ -33,8 +34,11 @@ class HandballCourtGeometry {
 
   const HandballCourtGeometry(this.court);
 
-  static const double goalWidth = 3.0;
-  static const double goalAreaRadius = 6.0;
+  // The goal area is also enforced, not only drawn — the simulator keeps
+  // outfield players out of it — so its dimensions live in [GoalArea], where
+  // pure-Dart code can reach them, and are re-exported here for the painter.
+  static const double goalWidth = GoalArea.goalWidthMeters;
+  static const double goalAreaRadius = GoalArea.radiusMeters;
   static const double freeThrowRadius = 9.0;
   static const double sevenMetreLineLength = 1.0;
   static const double goalkeeperLineLength = 0.15;

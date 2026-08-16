@@ -53,4 +53,13 @@ List<Override> kinetagProviderOverrides() => [
       trackingSampleRateProvider.overrideWith(
         (ref) => ref.watch(appSettingsProvider.select((s) => s.captureRateHz)),
       ),
+
+      // How often the bench rotates. Like the line-up, this is a property of
+      // the game being played rather than of the roster, so it comes from
+      // settings.
+      trackingSubstitutionIntervalProvider.overrideWith(
+        (ref) => ref.watch(
+          appSettingsProvider.select((s) => s.substitutionInterval),
+        ),
+      ),
     ];

@@ -6,6 +6,7 @@ library;
 
 export 'court.dart';
 export 'device_connection_state.dart';
+export 'goal_area.dart';
 export 'player.dart';
 export 'player_role.dart';
 export 'position_frame.dart';

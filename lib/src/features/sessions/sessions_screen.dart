@@ -6,6 +6,7 @@ import '../../domain/domain.dart';
 import '../../storage/storage_providers.dart';
 import 'analysis_navigation.dart';
 import 'player_analysis_screen.dart';
+import 'player_figure_screens.dart';
 import 'replay_controller.dart';
 import 'replay_screen.dart';
 import 'session_analysis_screen.dart';
@@ -50,6 +51,14 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
       TeamAnalysisView() =>
         SessionAnalysisScreen(onBackToSessions: _closeSession),
       PlayerAnalysisView(:final tagId) => PlayerAnalysisScreen(
+          tagId: tagId,
+          onBackToSessions: _closeSession,
+        ),
+      PlayerHeatmapView(:final tagId) => PlayerHeatmapScreen(
+          tagId: tagId,
+          onBackToSessions: _closeSession,
+        ),
+      PlayerSpeedView(:final tagId) => PlayerSpeedScreen(
           tagId: tagId,
           onBackToSessions: _closeSession,
         ),

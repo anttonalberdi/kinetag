@@ -43,6 +43,18 @@ Future<void> pump(
 
 AppSettings get settings => container.read(appSettingsProvider);
 
+/// The slider belonging to the setting called [label].
+///
+/// By label rather than by position: which slider is third on the screen is a
+/// layout decision, and a test that encodes it fails every time a setting is
+/// added between two others.
+Finder sliderFor(String label) => find.descendant(
+      of: find
+          .ancestor(of: find.text(label), matching: find.byType(Column))
+          .first,
+      matching: find.byType(Slider),
+    );
+
 void main() {
   testWidgets('shows the current values of every setting', (tester) async {
     await pump(tester, const SettingsScreen());
@@ -58,8 +70,12 @@ void main() {
     await pump(tester, const SettingsScreen());
     final before = settings.analytics.maxPlausibleSpeedMps;
 
-    // The second slider is the speed ceiling; the first is the capture rate.
-    await tester.drag(find.byType(Slider).at(1), const Offset(-80, 0));
+    // Settings are a scrolling list, and a drag aimed at a widget below the
+    // fold lands on whatever is there instead.
+    await tester.ensureVisible(sliderFor('Implausible speed threshold'));
+    await tester.pumpAndSettle();
+    await tester.drag(
+        sliderFor('Implausible speed threshold'), const Offset(-80, 0));
     await tester.pumpAndSettle();
 
     expect(settings.analytics.maxPlausibleSpeedMps, lessThan(before));
@@ -87,8 +103,8 @@ void main() {
       (tester) async {
     await pump(tester, const SettingsScreen());
 
-    expect(
-        tester.widget<Slider>(find.byType(Slider).first).onChanged, isNotNull);
+    expect(tester.widget<Slider>(sliderFor('Capture rate')).onChanged,
+        isNotNull);
   });
 
   testWidgets('the capture rate is locked while a recording is open',
@@ -97,7 +113,7 @@ void main() {
     // metric derived from the session.
     await pump(tester, const SettingsScreen(), recording: true);
 
-    expect(tester.widget<Slider>(find.byType(Slider).first).onChanged, isNull);
+    expect(tester.widget<Slider>(sliderFor('Capture rate')).onChanged, isNull);
     expect(
       find.textContaining('Locked while recording: a rate that changed'),
       findsOneWidget,
@@ -137,14 +153,45 @@ void main() {
     );
   });
 
+  testWidgets('substitutions default to once a minute and can be turned off',
+      (tester) async {
+    await pump(tester, const SettingsScreen());
+
+    expect(settings.substitutionIntervalSeconds, 60);
+    expect(settings.substitutionInterval, const Duration(minutes: 1));
+    expect(find.text('01:00'), findsOneWidget);
+
+    // All the way to the left of the scale is "no substitutions", which is a
+    // real way to play rather than an invalid interval.
+    await tester.ensureVisible(sliderFor('Substitution interval'));
+    await tester.pumpAndSettle();
+    await tester.drag(sliderFor('Substitution interval'), const Offset(-600, 0));
+    await tester.pumpAndSettle();
+
+    expect(settings.substitutesRotate, isFalse);
+    expect(find.text('Off'), findsOneWidget);
+  });
+
+  testWidgets('the substitution interval is locked while a recording is open',
+      (tester) async {
+    await pump(tester, const SettingsScreen(), recording: true);
+
+    expect(
+      tester.widget<Slider>(sliderFor('Substitution interval')).onChanged,
+      isNull,
+    );
+  });
+
   testWidgets('the analytics sliders stay editable while recording',
       (tester) async {
     // They only change how stored samples are interpreted, so locking them
     // would be pointless friction.
     await pump(tester, const SettingsScreen(), recording: true);
 
-    expect(tester.widget<Slider>(find.byType(Slider).at(1)).onChanged,
-        isNotNull);
+    expect(
+      tester.widget<Slider>(sliderFor('Implausible speed threshold')).onChanged,
+      isNotNull,
+    );
   });
 
   testWidgets('the roster is editable when nothing is recording',

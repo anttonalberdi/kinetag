@@ -20,15 +20,28 @@ import 'replay_screen.dart';
 /// so the two can never disagree; what the page buys is the speed series over
 /// time, the split of that time by intensity, and the comparison against the
 /// player's own team — none of which is legible in a 300-pixel column.
+///
+/// This is a summary: the map and the speed trace appear as previews that
+/// open their own pages, and the sentences explaining how each figure is
+/// arrived at live there rather than here. A page a coach scans between
+/// possessions cannot also be the page that documents the method.
 class PlayerAnalysisScreen extends ConsumerWidget {
   final String tagId;
 
   /// Leaves the open session altogether, for the first breadcrumb.
   final VoidCallback onBackToSessions;
 
-  /// Below this width the chart and the comparison stack instead of sitting
-  /// side by side.
+  /// Below this width the intensity split and the comparison stack instead of
+  /// sitting side by side.
   static const double _wideBreakpoint = 900;
+
+  /// Content width below which the map and the speed chart stack.
+  ///
+  /// Two figures side by side need enough room that neither is squeezed into
+  /// a shape it cannot be read in: the chart loses its time axis to the
+  /// 44-pixel speed labels, and the court has a 2:1 aspect it will letterbox
+  /// down to nothing to preserve.
+  static const double _sideBySideBreakpoint = 720;
 
   const PlayerAnalysisScreen({
     super.key,
@@ -114,11 +127,7 @@ class PlayerAnalysisScreen extends ConsumerWidget {
     final intensity = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SectionTitle(
-          title: 'Time by intensity',
-          description: 'Bands are indicative for indoor team sport, '
-              'not a personal profile.',
-        ),
+        const SectionTitle(title: 'Time by intensity'),
         const SizedBox(height: 8),
         ZoneBreakdownBar(breakdown: zones, color: color),
       ],
@@ -143,21 +152,7 @@ class PlayerAnalysisScreen extends ConsumerWidget {
         const Divider(height: 24),
         _StatTiles(track: track, squad: metrics),
         const SizedBox(height: 20),
-        const SectionTitle(
-          title: 'Where the time was spent',
-          description: 'Brighter is longer. Tap the map for the full-size '
-              'version and the figures behind it.',
-        ),
-        const SizedBox(height: 8),
-        PlayerHeatmapCard(tagId: tagId, color: color, team: team),
-        const SizedBox(height: 20),
-        const SectionTitle(
-          title: 'Speed over time',
-          description: 'Tap the chart to move the playhead there, then '
-              'return to the court to watch that moment.',
-        ),
-        const SizedBox(height: 8),
-        SpeedChart(track: track, color: color),
+        _FigurePreviews(tagId: tagId, track: track, color: color, team: team),
         const SizedBox(height: 20),
         if (isWide)
           Row(
@@ -189,6 +184,96 @@ class PlayerAnalysisScreen extends ConsumerWidget {
     }
     return null;
   }
+}
+
+/// The map and the speed trace, side by side while the window allows it.
+///
+/// Both are previews: neither is interactive here, and a tap on either opens
+/// the page where it is drawn at a size worth reading and explained.
+class _FigurePreviews extends ConsumerWidget {
+  final String tagId;
+  final PlayerTrackMetrics track;
+  final Color color;
+  final TeamMetrics? team;
+
+  /// One height for both, so the pair reads as a row rather than as two
+  /// panels that happen to be adjacent.
+  static const double _height = 200;
+
+  const _FigurePreviews({
+    required this.tagId,
+    required this.track,
+    required this.color,
+    required this.team,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final navigator = ref.read(sessionViewProvider.notifier);
+
+    final map = _TitledFigure(
+      title: 'Where the time was spent',
+      child: PlayerHeatmapCard(
+        tagId: tagId,
+        color: color,
+        team: team,
+        height: _height,
+        onTap: () => navigator.showPlayerHeatmap(tagId),
+      ),
+    );
+
+    final speed = _TitledFigure(
+      title: 'Speed over time',
+      child: SpeedChart(
+        track: track,
+        color: color,
+        height: _height,
+        onOpen: () => navigator.showPlayerSpeed(tagId),
+      ),
+    );
+
+    // Measured against the space actually available rather than the window:
+    // this block sits inside a page whose padding — and, on a wide window,
+    // whose neighbours — decide how much of the width it really gets.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth <
+            PlayerAnalysisScreen._sideBySideBreakpoint) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [map, const SizedBox(height: 20), speed],
+          );
+        }
+
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: map),
+            const SizedBox(width: 20),
+            Expanded(child: speed),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// A figure under its heading, with nothing else between the two.
+class _TitledFigure extends StatelessWidget {
+  final String title;
+  final Widget child;
+
+  const _TitledFigure({required this.title, required this.child});
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SectionTitle(title: title),
+          const SizedBox(height: 8),
+          child,
+        ],
+      );
 }
 
 class _Header extends StatelessWidget {

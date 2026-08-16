@@ -14,8 +14,8 @@ import '../../domain/domain.dart';
 /// [homeX] / [homeY] are fractions of court width / height in a *team-local*
 /// frame where the team defends `x = 0` and attacks `+x`. Fractions rather
 /// than metres so the same roster works on a court of any size; the away team
-/// is obtained by rotating the local frame 180° (see
-/// `MatchSimulation.anchorFor`).
+/// is obtained by rotating the local frame 180° (see the anchor in
+/// `MatchSimulation`).
 ///
 /// ## Why role-shaped movement at all
 ///
@@ -41,6 +41,18 @@ class RoleMovement {
   /// How much of the attack/defence swing this role follows, 0..1.
   final double advanceFactor;
 
+  /// Whether this envelope is a goalkeeper's, and so may stand in the goal
+  /// area.
+  ///
+  /// A property of the envelope rather than of [PlayerRole] because it answers
+  /// what the simulation actually needs to know — *is this player keeping
+  /// goal?* — which is not the same question as what the roster says. A tag
+  /// with no role assigned is simulated with a borrowed envelope (see
+  /// [unassignedAt]); when the one it borrows is the goalkeeper's, it stands
+  /// where a goalkeeper stands, and the exclusion has to agree with that or it
+  /// would spend the match being shoved off its own goal line.
+  final bool keepsGoal;
+
   const RoleMovement({
     required this.homeX,
     required this.homeY,
@@ -48,6 +60,7 @@ class RoleMovement {
     required this.rangeY,
     required this.maxSpeedMps,
     required this.advanceFactor,
+    this.keepsGoal = false,
   });
 
   /// Envelope for the [index]-th player on a team with no role assigned.
@@ -72,6 +85,7 @@ class RoleMovement {
       rangeY: 0.110,
       maxSpeedMps: 3.5,
       advanceFactor: 0.12,
+      keepsGoal: true,
     ),
     PlayerRole.leftWing: RoleMovement(
       homeX: 0.45,
@@ -142,6 +156,23 @@ class RoleMovement {
     advanceFactor: 0,
   );
 
+  /// The envelope for a player who has been substituted and is on their way
+  /// off.
+  ///
+  /// Same shape as [benched] — the seat is the target, so nothing here is read
+  /// but the speed — except that a player leaving the court jogs rather than
+  /// strolls. It matters beyond looks: the substitute replacing them may not
+  /// step on until they are off, so this speed sets how long each side plays a
+  /// player short.
+  static const RoleMovement leavingCourt = RoleMovement(
+    homeX: 0,
+    homeY: 0,
+    rangeX: 0,
+    rangeY: 0,
+    maxSpeedMps: 3.5,
+    advanceFactor: 0,
+  );
+
   /// The envelope for [role]; falls back to the first unassigned slot when
   /// there is none.
   static RoleMovement of(PlayerRole? role) =>
@@ -156,9 +187,10 @@ class RoleMovement {
           other.rangeX == rangeX &&
           other.rangeY == rangeY &&
           other.maxSpeedMps == maxSpeedMps &&
-          other.advanceFactor == advanceFactor;
+          other.advanceFactor == advanceFactor &&
+          other.keepsGoal == keepsGoal;
 
   @override
-  int get hashCode =>
-      Object.hash(homeX, homeY, rangeX, rangeY, maxSpeedMps, advanceFactor);
+  int get hashCode => Object.hash(
+      homeX, homeY, rangeX, rangeY, maxSpeedMps, advanceFactor, keepsGoal);
 }

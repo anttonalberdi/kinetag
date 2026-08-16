@@ -34,6 +34,16 @@ class AppSettings {
   /// recording is open.
   final int fieldPlayersOnCourt;
 
+  /// How often each side exchanges a field player with a substitute, in
+  /// seconds. Zero keeps the starting line-up on court for the whole match.
+  ///
+  /// A side with an empty bench never substitutes whatever this says, so on
+  /// the default roster — which fields everybody — the setting shows its
+  /// effect only once the roster holds more players than the line-up. Changing
+  /// it rebuilds the tracking source, so the UI blocks it while a recording is
+  /// open.
+  final int substitutionIntervalSeconds;
+
   /// Default mounting height applied to receivers in a generated layout.
   final double receiverMountHeightMeters;
 
@@ -46,12 +56,20 @@ class AppSettings {
   const AppSettings({
     this.captureRateHz = 20,
     this.fieldPlayersOnCourt = SimulatedSquad.defaultFieldPlayersOnCourt,
+    this.substitutionIntervalSeconds = defaultSubstitutionIntervalSeconds,
     this.receiverMountHeightMeters = defaultMountHeightMeters,
     this.receiverMarginMeters = defaultReceiverMarginMeters,
     this.analytics = AnalyticsThresholds.defaults,
   });
 
   static const AppSettings defaults = AppSettings();
+
+  /// [substitutionIntervalSeconds] as the simulator wants it.
+  Duration get substitutionInterval =>
+      Duration(seconds: substitutionIntervalSeconds);
+
+  /// Whether substitutions happen at all.
+  bool get substitutesRotate => substitutionIntervalSeconds > 0;
 
   /// Above head height, which is where UWB anchors belong: a body between an
   /// anchor and a tag blocks the ranging signal.
@@ -66,6 +84,21 @@ class AppSettings {
   /// designed for; the lower one keeps the live view watchable.
   static const int minCaptureRateHz = 5;
   static const int maxCaptureRateHz = 100;
+
+  /// A minute on, a minute off — a short bench rotating the way a training
+  /// game does.
+  static const int defaultSubstitutionIntervalSeconds = 60;
+
+  /// Shortest and longest rotation offered, in seconds. Below the minimum a
+  /// substitute would still be walking on when their replacement was called;
+  /// above the maximum the bench simply sits, which [substitutionOffSeconds]
+  /// already expresses.
+  static const int minSubstitutionIntervalSeconds = 15;
+  static const int maxSubstitutionIntervalSeconds = 600;
+
+  /// The value that turns rotation off, kept at the bottom of the same scale
+  /// so the UI needs one control rather than a switch and a slider.
+  static const int substitutionOffSeconds = 0;
   static const double minMountHeightMeters = 1.0;
   static const double maxMountHeightMeters = 12.0;
   static const double minReceiverMarginMeters = 0.0;
@@ -76,6 +109,7 @@ class AppSettings {
   AppSettings copyWith({
     int? captureRateHz,
     int? fieldPlayersOnCourt,
+    int? substitutionIntervalSeconds,
     double? receiverMountHeightMeters,
     double? receiverMarginMeters,
     AnalyticsThresholds? analytics,
@@ -83,6 +117,8 @@ class AppSettings {
       AppSettings(
         captureRateHz: captureRateHz ?? this.captureRateHz,
         fieldPlayersOnCourt: fieldPlayersOnCourt ?? this.fieldPlayersOnCourt,
+        substitutionIntervalSeconds:
+            substitutionIntervalSeconds ?? this.substitutionIntervalSeconds,
         receiverMountHeightMeters:
             receiverMountHeightMeters ?? this.receiverMountHeightMeters,
         receiverMarginMeters:
@@ -93,6 +129,7 @@ class AppSettings {
   Map<String, dynamic> toJson() => {
         'captureRateHz': captureRateHz,
         'fieldPlayersOnCourt': fieldPlayersOnCourt,
+        'substitutionIntervalSeconds': substitutionIntervalSeconds,
         'receiverMountHeightMeters': receiverMountHeightMeters,
         'receiverMarginMeters': receiverMarginMeters,
         'maxPlausibleSpeedMps': analytics.maxPlausibleSpeedMps,
@@ -109,6 +146,9 @@ class AppSettings {
           fallback.captureRateHz,
       fieldPlayersOnCourt: (json['fieldPlayersOnCourt'] as num?)?.toInt() ??
           fallback.fieldPlayersOnCourt,
+      substitutionIntervalSeconds:
+          (json['substitutionIntervalSeconds'] as num?)?.toInt() ??
+              fallback.substitutionIntervalSeconds,
       receiverMountHeightMeters:
           (json['receiverMountHeightMeters'] as num?)?.toDouble() ??
               fallback.receiverMountHeightMeters,
@@ -135,15 +175,23 @@ class AppSettings {
       other is AppSettings &&
           other.captureRateHz == captureRateHz &&
           other.fieldPlayersOnCourt == fieldPlayersOnCourt &&
+          other.substitutionIntervalSeconds == substitutionIntervalSeconds &&
           other.receiverMountHeightMeters == receiverMountHeightMeters &&
           other.receiverMarginMeters == receiverMarginMeters &&
           other.analytics == analytics;
 
   @override
-  int get hashCode => Object.hash(captureRateHz, fieldPlayersOnCourt,
-      receiverMountHeightMeters, receiverMarginMeters, analytics);
+  int get hashCode => Object.hash(
+      captureRateHz,
+      fieldPlayersOnCourt,
+      substitutionIntervalSeconds,
+      receiverMountHeightMeters,
+      receiverMarginMeters,
+      analytics);
 
   @override
-  String toString() =>
-      'AppSettings(${captureRateHz}Hz, 1+$fieldPlayersOnCourt, $analytics)';
+  String toString() => 'AppSettings(${captureRateHz}Hz, '
+      '1+$fieldPlayersOnCourt, '
+      'subs ${substitutesRotate ? '${substitutionIntervalSeconds}s' : 'off'}, '
+      '$analytics)';
 }

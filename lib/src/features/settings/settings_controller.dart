@@ -26,6 +26,21 @@ class SettingsController extends Notifier<AppSettings> {
         ),
       );
 
+  /// Sets the rotation period, or turns rotation off with anything at or below
+  /// zero.
+  ///
+  /// Off is a real answer rather than an out-of-range one — a match played
+  /// without substitutions is a match — so it is snapped to rather than
+  /// clamped away.
+  void setSubstitutionIntervalSeconds(int seconds) => state = state.copyWith(
+        substitutionIntervalSeconds: seconds <= 0
+            ? AppSettings.substitutionOffSeconds
+            : seconds.clamp(
+                AppSettings.minSubstitutionIntervalSeconds,
+                AppSettings.maxSubstitutionIntervalSeconds,
+              ),
+      );
+
   void setReceiverMountHeightMeters(double metres) => state = state.copyWith(
         receiverMountHeightMeters: metres.clamp(
           AppSettings.minMountHeightMeters,

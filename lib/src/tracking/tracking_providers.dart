@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../domain/domain.dart';
+import 'simulator/match_simulation.dart';
 import 'simulator/simulated_squad.dart';
 import 'simulator/simulator_tracking_source.dart';
 import 'tracking_message.dart';
@@ -31,6 +32,14 @@ final trackingSampleRateProvider =
 final simulatedSquadProvider =
     Provider<SimulatedSquad>((ref) => SimulatedSquad.handballTeams());
 
+/// How often the simulated sides rotate their bench.
+///
+/// Overridden in `main.dart` from settings, like the sample rate. Zero keeps
+/// the starting line-up on for the whole session.
+final trackingSubstitutionIntervalProvider = Provider<Duration>(
+  (ref) => MatchSimulation.defaultSubstitutionInterval,
+);
+
 /// The single seam where the simulator is replaced by hardware or replay.
 ///
 /// Every consumer — live view, recorder, analytics — depends on
@@ -42,6 +51,7 @@ final trackingSourceProvider = Provider<TrackingSource>((ref) {
     court: ref.watch(trackingCourtProvider),
     squad: ref.watch(simulatedSquadProvider),
     sampleRateHz: ref.watch(trackingSampleRateProvider),
+    substitutionInterval: ref.watch(trackingSubstitutionIntervalProvider),
   );
   ref.onDispose(source.dispose);
   return source;

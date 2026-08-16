@@ -3,8 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kinetag/src/core/court_view_transform.dart';
 import 'package:kinetag/src/features/court/court_canvas.dart';
+import 'package:kinetag/src/features/sessions/analysis_widgets.dart';
 import 'package:kinetag/src/features/sessions/heatmap_panel.dart';
 import 'package:kinetag/src/features/sessions/player_analysis_screen.dart';
+import 'package:kinetag/src/features/sessions/player_figure_screens.dart';
 import 'package:kinetag/src/features/sessions/replay_controller.dart';
 import 'package:kinetag/src/features/sessions/replay_screen.dart';
 import 'package:kinetag/src/features/sessions/session_analysis_screen.dart';
@@ -57,6 +59,25 @@ Offset screenPointFor(WidgetTester tester, Offset world) {
 /// of anything short of a very tall window.
 Future<void> scrollToPlayerTable(WidgetTester tester) async {
   await tester.scrollUntilVisible(find.byType(DataTable), 200);
+  await tester.pumpAndSettle();
+}
+
+/// Opens a player's page through the team page's ranking table.
+///
+/// The route a phone-width window has: the movement panel that opens a player
+/// straight from the court has no room beside it at that width.
+Future<void> openPlayerFromTable(WidgetTester tester, String name) async {
+  await tester.tap(find.widgetWithText(FilledButton, 'Analysis'));
+  await tester.pumpAndSettle();
+
+  final row =
+      find.descendant(of: find.byType(DataTable), matching: find.text(name));
+  // The table is below the fold on a phone: scroll it into the list, then the
+  // rest of the way onto the screen.
+  await tester.scrollUntilVisible(row, 200);
+  await tester.ensureVisible(row);
+  await tester.pumpAndSettle();
+  await tester.tap(row);
   await tester.pumpAndSettle();
 }
 
@@ -170,21 +191,69 @@ void main() {
       expectPlayerPage('Player 1');
     });
 
-    testWidgets('tapping the speed chart moves the playhead', (tester) async {
+    testWidgets('shows the map and the speed chart side by side when wide',
+        (tester) async {
       await seedRecording(repository, name: 'Tuesday');
       await pumpReplay(tester);
       await tester.tap(find.text('Player 0'));
       await tester.pumpAndSettle();
-      expect(replayState.position, Duration.zero);
 
-      final chart = tester.getRect(find.byType(CustomPaint).last);
-      await tester.tapAt(Offset(chart.right - 8, chart.center.dy));
+      final map = tester.getRect(find.byType(PlayerHeatmapCard));
+      final chart = tester.getRect(find.byType(SpeedChart));
+
+      expect(map.right, lessThanOrEqualTo(chart.left), reason: 'one row');
+      expect(map.top, chart.top);
+      expect(map.height, chart.height);
+    });
+
+    testWidgets('stacks the map above the speed chart when narrow',
+        (tester) async {
+      await seedRecording(repository, name: 'Tuesday');
+      // Reached through the team page: the movement panel that opens a player
+      // directly has no room beside the court at this width.
+      await pumpReplay(tester, size: const Size(420, 780));
+      await openPlayerFromTable(tester, 'Player 0');
+
+      final map = tester.getRect(find.byType(PlayerHeatmapCard));
+      final chart = tester.getRect(find.byType(SpeedChart));
+
+      expect(map.bottom, lessThanOrEqualTo(chart.top), reason: 'stacked');
+      expect(map.left, chart.left);
+      expect(map.width, chart.width);
+    });
+
+    testWidgets('the speed chart opens its own page, where it scrubs',
+        (tester) async {
+      await seedRecording(repository, name: 'Tuesday');
+      await pumpReplay(tester);
+      await tester.tap(find.text('Player 0'));
+      await tester.pumpAndSettle();
+
+      // On the player page the chart is a preview: a tap there navigates
+      // rather than seeking.
+      expect(replayState.position, Duration.zero);
+      await tester.tap(find.byType(SpeedChart));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(PlayerSpeedScreen), findsOneWidget);
+      expect(replayState.position, Duration.zero);
+      // The explanation the player page leaves out lives here.
+      expect(find.textContaining('measured over a'), findsOneWidget);
+      expect(find.text('Time by intensity'), findsOneWidget);
+
+      final chart = tester.getRect(find.byType(SpeedChart));
+      await tester.tapAt(Offset(chart.right - 12, chart.center.dy));
       await tester.pumpAndSettle();
 
       expect(replayState.position, greaterThan(Duration.zero));
+
+      // And the trail leads back through the player, not out of the session.
+      await tester.tap(find.widgetWithText(TextButton, 'Player 0'));
+      await tester.pumpAndSettle();
+      expectPlayerPage('Player 0');
     });
 
-    testWidgets('the movement map opens full size from the page',
+    testWidgets('the movement map opens its own page from the preview',
         (tester) async {
       await seedRecording(repository, name: 'Tuesday');
       await pumpReplay(tester);
@@ -196,42 +265,26 @@ void main() {
       await tester.tap(find.byType(CourtHeatmap));
       await tester.pumpAndSettle();
 
-      // The enlarged map arrives with the figures the thumbnail has no room
-      // for, and its own copy of the court.
-      expect(find.byType(Dialog), findsOneWidget);
-      expect(find.textContaining('Player 0 •'), findsOneWidget);
+      // The full-size map arrives with the figures the thumbnail has no room
+      // for, and with the note explaining what a square holds.
+      expect(find.byType(PlayerHeatmapScreen), findsOneWidget);
+      expect(find.byType(Dialog), findsNothing);
       expect(find.text('TIME MAPPED'), findsOneWidget);
       expect(find.text('BUSIEST SQUARE'), findsOneWidget);
       expect(find.text('FLOOR COVERED'), findsOneWidget);
       expect(find.byType(HeatmapScaleLegend), findsOneWidget);
+      expect(find.textContaining('Each square is'), findsOneWidget);
 
-      await tester.tap(find.byTooltip('Close'));
+      await tester.tap(find.widgetWithText(TextButton, 'Player 0'));
       await tester.pumpAndSettle();
 
-      expect(find.byType(Dialog), findsNothing);
       expectPlayerPage('Player 0');
     });
 
     testWidgets('lays out in a phone-width window', (tester) async {
       await seedRecording(repository, name: 'Tuesday');
       await pumpReplay(tester, size: const Size(420, 780));
-
-      // The movement panel has no room beside the court on a phone, so the
-      // page is reached through the team analysis instead.
-      await tester.tap(find.widgetWithText(FilledButton, 'Analysis'));
-      await tester.pumpAndSettle();
-
-      final row = find.descendant(
-        of: find.byType(DataTable),
-        matching: find.text('Player 0'),
-      );
-      // The table is below the fold on a phone: scroll it into the list, then
-      // the rest of the way onto the screen.
-      await tester.scrollUntilVisible(row, 200);
-      await tester.ensureVisible(row);
-      await tester.pumpAndSettle();
-      await tester.tap(row);
-      await tester.pumpAndSettle();
+      await openPlayerFromTable(tester, 'Player 0');
 
       expectPlayerPage('Player 0');
       // The page scrolls on a phone rather than compressing: the sections

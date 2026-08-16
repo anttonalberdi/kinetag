@@ -154,6 +154,39 @@ void main() {
     });
   });
 
+  group('the substitution interval reaches the tracking source', () {
+    test('it defaults to a minute and follows the setting', () {
+      final container = ProviderContainer(overrides: kinetagProviderOverrides());
+      addTearDown(container.dispose);
+
+      expect(container.read(trackingSubstitutionIntervalProvider),
+          const Duration(minutes: 1));
+
+      container
+          .read(appSettingsProvider.notifier)
+          .setSubstitutionIntervalSeconds(120);
+      expect(container.read(trackingSubstitutionIntervalProvider),
+          const Duration(minutes: 2));
+    });
+
+    test('turning it off is a zero interval, not a clamped one', () {
+      final c = makeController();
+
+      c.controller.setSubstitutionIntervalSeconds(0);
+      expect(readState(c.container).substitutionIntervalSeconds, 0);
+      expect(readState(c.container).substitutesRotate, isFalse);
+
+      // Anything positive is held inside the usable range: below the minimum a
+      // substitute would still be walking on when the next call came.
+      c.controller.setSubstitutionIntervalSeconds(3);
+      expect(readState(c.container).substitutionIntervalSeconds,
+          AppSettings.minSubstitutionIntervalSeconds);
+      c.controller.setSubstitutionIntervalSeconds(9999);
+      expect(readState(c.container).substitutionIntervalSeconds,
+          AppSettings.maxSubstitutionIntervalSeconds);
+    });
+  });
+
   group('thresholds change what the metrics say', () {
     test('a lower speed ceiling discards more steps', () {
       final track = straightTrack(speedMps: 8.0);

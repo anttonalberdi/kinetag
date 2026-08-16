@@ -10,29 +10,97 @@ import '../../core/metric_format.dart';
 import 'replay_controller.dart';
 
 /// Heading for one block of an analysis page.
+///
+/// The description is optional because an overview page is read by scanning:
+/// a sentence under every heading is prose to skip past. Pages that show one
+/// figure and nothing else — a player's map, their speed trace — are where
+/// the explanation belongs, and there it is not optional.
 class SectionTitle extends StatelessWidget {
   final String title;
-  final String description;
+  final String? description;
 
   const SectionTitle({
     super.key,
     required this.title,
-    required this.description,
+    this.description,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final description = this.description;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(title, style: theme.textTheme.titleMedium),
-        Text(
-          description,
-          style: theme.textTheme.bodySmall
-              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-        ),
+        if (description != null)
+          Text(
+            description,
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
       ],
+    );
+  }
+}
+
+/// A figure shown small, opening its own page when tapped.
+///
+/// One widget for every such preview so the affordance is identical wherever
+/// it appears: a reader who learns that the corner glyph means "there is more
+/// of this" learns it once.
+class OpensInFull extends StatelessWidget {
+  /// What opens, for the screen reader and the tooltip.
+  final String label;
+
+  final VoidCallback onTap;
+  final Widget child;
+
+  const OpensInFull({
+    super.key,
+    required this.label,
+    required this.onTap,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Semantics(
+      button: true,
+      label: '$label, tap to open',
+      child: Tooltip(
+        message: 'Open $label',
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Stack(
+            children: [
+              child,
+              Positioned(
+                top: 6,
+                right: 6,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surface.withValues(alpha: 0.72),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(3),
+                    child: Icon(
+                      Icons.open_in_full,
+                      size: 14,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -266,11 +334,23 @@ class SpeedChart extends ConsumerWidget {
   final Color color;
   final double height;
 
+  /// When set, the chart is a preview: a tap opens the page named by
+  /// [openLabel] instead of moving the playhead.
+  ///
+  /// The two cannot coexist on one chart — a tap either seeks or navigates —
+  /// and seeking is the interaction that needs the room, so it is the full
+  /// page that keeps it.
+  final VoidCallback? onOpen;
+
+  final String openLabel;
+
   const SpeedChart({
     super.key,
     required this.track,
     required this.color,
     this.height = 220,
+    this.onOpen,
+    this.openLabel = 'the speed chart',
   });
 
   @override
@@ -279,7 +359,7 @@ class SpeedChart extends ConsumerWidget {
 
     if (track.speeds.isEmpty) {
       return SizedBox(
-        height: 80,
+        height: height,
         child: Center(
           child: Text(
             'Too few samples to measure speed over time.',
@@ -311,22 +391,29 @@ class SpeedChart extends ConsumerWidget {
           );
         }
 
+        final chart = CustomPaint(
+          size: size,
+          painter: _SpeedChartPainter(
+            geometry: geometry,
+            color: color,
+            gridColor: theme.colorScheme.outlineVariant,
+            surfaceColor: theme.colorScheme.surfaceContainerHighest,
+            labelColor: theme.colorScheme.onSurfaceVariant,
+            playheadColor: theme.colorScheme.onSurface,
+            playheadMicros: playheadMicros,
+          ),
+        );
+
+        final onOpen = this.onOpen;
+        if (onOpen != null) {
+          return OpensInFull(label: openLabel, onTap: onOpen, child: chart);
+        }
+
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTapDown: (details) => seekTo(details.localPosition),
           onHorizontalDragUpdate: (details) => seekTo(details.localPosition),
-          child: CustomPaint(
-            size: size,
-            painter: _SpeedChartPainter(
-              geometry: geometry,
-              color: color,
-              gridColor: theme.colorScheme.outlineVariant,
-              surfaceColor: theme.colorScheme.surfaceContainerHighest,
-              labelColor: theme.colorScheme.onSurfaceVariant,
-              playheadColor: theme.colorScheme.onSurface,
-              playheadMicros: playheadMicros,
-            ),
-          ),
+          child: chart,
         );
       },
     );

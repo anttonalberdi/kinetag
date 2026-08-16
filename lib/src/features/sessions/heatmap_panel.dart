@@ -12,6 +12,7 @@ import '../court/handball_court_layer.dart';
 import '../court/heatmap_layer.dart';
 import '../court/tag_roster.dart';
 import 'analysis_providers.dart';
+import 'analysis_widgets.dart';
 import 'replay_controller.dart';
 import 'replay_screen.dart';
 
@@ -70,7 +71,7 @@ class TeamHeatmapCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final roster = ref.watch(replayRosterProvider);
 
-    return _OccupancyBuilder(
+    return OccupancyBuilder(
       height: height,
       builder: (court, occupancy) => HeatmapPreview(
         court: court,
@@ -112,12 +113,17 @@ class PlayerHeatmapCard extends ConsumerWidget {
 
   final double height;
 
+  /// Where a tap goes. Null keeps the default — the map opens over the page
+  /// it was tapped on.
+  final VoidCallback? onTap;
+
   const PlayerHeatmapCard({
     super.key,
     required this.tagId,
     required this.color,
     required this.team,
     this.height = kPlayerHeatmapHeight,
+    this.onTap,
   });
 
   @override
@@ -126,41 +132,68 @@ class PlayerHeatmapCard extends ConsumerWidget {
     final name = roster.entryFor(tagId)?.playerName ?? tagId;
     final team = this.team;
 
-    return _OccupancyBuilder(
+    return OccupancyBuilder(
       height: height,
       builder: (court, occupancy) => HeatmapPreview(
         court: court,
         height: height,
         title: '$name • where the time was spent',
-        selections: [
-          HeatmapSelection(
-            label: name,
-            color: color,
-            side: team?.side,
-            grid: occupancy.forTag(tagId),
-          ),
-          if (team != null && team.playerCount > 1)
-            HeatmapSelection(
-              label: team.label,
-              color: color,
-              side: team.side,
-              grid: occupancy.forTags([
-                for (final track in team.tracks) track.tagId,
-              ]),
-            ),
-        ],
+        onTap: onTap,
+        selections: playerHeatmapSelections(
+          tagId: tagId,
+          name: name,
+          color: color,
+          team: team,
+          occupancy: occupancy,
+        ),
       ),
     );
   }
 }
 
+/// The maps a player's page offers: their own first, and their team's behind
+/// it as the thing to read it against.
+///
+/// A function rather than a method so the small card and the full page build
+/// the same list from the same arguments.
+List<HeatmapSelection> playerHeatmapSelections({
+  required String tagId,
+  required String name,
+  required Color color,
+  required TeamMetrics? team,
+  required SessionOccupancy occupancy,
+}) =>
+    [
+      HeatmapSelection(
+        label: name,
+        color: color,
+        side: team?.side,
+        grid: occupancy.forTag(tagId),
+      ),
+      if (team != null && team.playerCount > 1)
+        HeatmapSelection(
+          label: team.label,
+          color: color,
+          side: team.side,
+          grid: occupancy.forTags([
+            for (final track in team.tracks) track.tagId,
+          ]),
+        ),
+    ];
+
 /// Resolves the open session's court and occupancy, holding the layout steady
 /// while they load so that a page does not jump as its maps arrive.
-class _OccupancyBuilder extends ConsumerWidget {
+class OccupancyBuilder extends ConsumerWidget {
+  /// Height of the box that stands in for the map while it loads.
   final double height;
+
   final Widget Function(Court court, SessionOccupancy occupancy) builder;
 
-  const _OccupancyBuilder({required this.height, required this.builder});
+  const OccupancyBuilder({
+    super.key,
+    required this.height,
+    required this.builder,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -200,12 +233,18 @@ class HeatmapPreview extends StatelessWidget {
 
   final double height;
 
+  /// Where a tap goes. Null opens the map over the current page, which is
+  /// what a card in a list of teams wants; a page devoted to one player sends
+  /// its reader onward to the map's own page instead.
+  final VoidCallback? onTap;
+
   const HeatmapPreview({
     super.key,
     required this.court,
     required this.selections,
     required this.title,
     this.height = kTeamHeatmapHeight,
+    this.onTap,
   });
 
   @override
@@ -223,48 +262,20 @@ class HeatmapPreview extends StatelessWidget {
       );
     }
 
-    return Semantics(
-      button: true,
-      label: '$title, tap to enlarge',
-      child: Tooltip(
-        message: 'Tap to enlarge',
-        child: InkWell(
-          onTap: () => showHeatmapDetail(
-            context,
-            court: court,
-            selections: selections,
-            title: title,
-          ),
-          borderRadius: BorderRadius.circular(10),
-          child: Stack(
-            children: [
-              CourtHeatmap(
+    return OpensInFull(
+      label: 'the movement map',
+      onTap: onTap ??
+          () => showHeatmapDetail(
+                context,
                 court: court,
-                selection: primary,
-                height: height,
-                showAveragePosition: false,
+                selections: selections,
+                title: title,
               ),
-              Positioned(
-                top: 6,
-                right: 6,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surface.withValues(alpha: 0.72),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(3),
-                    child: Icon(
-                      Icons.open_in_full,
-                      size: 14,
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
+      child: CourtHeatmap(
+        court: court,
+        selection: primary,
+        height: height,
+        showAveragePosition: false,
       ),
     );
   }
@@ -361,12 +372,85 @@ Future<void> showHeatmapDetail(
       ),
     );
 
-/// The map at a size worth reading, with the figures behind it.
+/// The map at a size worth reading, with the figures and the note behind it.
 ///
-/// A dialog rather than another page in the breadcrumb trail: this is one
-/// figure looked at closely, not a new place in the analysis, and a reader who
-/// opens it expects to be back where they were when they close it.
-class _HeatmapDetailDialog extends StatefulWidget {
+/// Shared by the dialog a team card opens and by a player's own map page, so
+/// the two can never drift apart: one map is one map, wherever it is read.
+class HeatmapDetail extends StatefulWidget {
+  final Court court;
+
+  /// The maps on offer; the first is the one shown when the view opens.
+  final List<HeatmapSelection> selections;
+
+  const HeatmapDetail({
+    super.key,
+    required this.court,
+    required this.selections,
+  });
+
+  @override
+  State<HeatmapDetail> createState() => _HeatmapDetailState();
+}
+
+class _HeatmapDetailState extends State<HeatmapDetail> {
+  int _index = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    // Guards against a rebuild with fewer maps than the reader had chosen
+    // from — a threshold change can drop a player out of the metrics.
+    final index = _index.clamp(0, widget.selections.length - 1);
+    final selection = widget.selections[index];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (widget.selections.length > 1) ...[
+          _SelectionChips(
+            selections: widget.selections,
+            index: index,
+            onChanged: (index) => setState(() => _index = index),
+          ),
+          const SizedBox(height: 12),
+        ],
+        AspectRatio(
+          aspectRatio: widget.court.widthMeters / widget.court.heightMeters,
+          child: CourtHeatmap(court: widget.court, selection: selection),
+        ),
+        const SizedBox(height: 14),
+        HeatmapScaleLegend(selection: selection),
+        const SizedBox(height: 16),
+        _HeatmapFigures(selection: selection),
+        const SizedBox(height: 12),
+        Text(
+          'Each square is '
+          '${selection.grid.cellWidthMeters.toStringAsFixed(1)} × '
+          '${selection.grid.cellHeightMeters.toStringAsFixed(1)} m '
+          'and holds the time spent standing in it, smoothed '
+          'across neighbouring squares so a run reads as a path '
+          'rather than as a row of blocks. Time is credited '
+          'between one fix and the next, and a gap longer than '
+          '${OccupancyGrid.maxAttributableGap.inSeconds}s is '
+          'treated as a dropout rather than as standing still. '
+          'The ring marks the average position, weighted by the time spent '
+          'at each one.',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// The detail view over the page that opened it.
+///
+/// A dialog rather than another page in the breadcrumb trail: a team card is
+/// one of several on a page being scanned, and a reader who enlarges one map
+/// expects to be back among the others when they close it.
+class _HeatmapDetailDialog extends StatelessWidget {
   final Court court;
   final List<HeatmapSelection> selections;
   final String title;
@@ -378,16 +462,8 @@ class _HeatmapDetailDialog extends StatefulWidget {
   });
 
   @override
-  State<_HeatmapDetailDialog> createState() => _HeatmapDetailDialogState();
-}
-
-class _HeatmapDetailDialogState extends State<_HeatmapDetailDialog> {
-  int _index = 0;
-
-  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final selection = widget.selections[_index];
 
     return Dialog(
       insetPadding: const EdgeInsets.all(24),
@@ -403,7 +479,7 @@ class _HeatmapDetailDialogState extends State<_HeatmapDetailDialog> {
                 children: [
                   Expanded(
                     child: Text(
-                      widget.title,
+                      title,
                       style: theme.textTheme.titleMedium,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -415,49 +491,10 @@ class _HeatmapDetailDialogState extends State<_HeatmapDetailDialog> {
                   ),
                 ],
               ),
-              if (widget.selections.length > 1) ...[
-                const SizedBox(height: 4),
-                _SelectionChips(
-                  selections: widget.selections,
-                  index: _index,
-                  onChanged: (index) => setState(() => _index = index),
-                ),
-              ],
               const SizedBox(height: 12),
               Flexible(
                 child: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      AspectRatio(
-                        aspectRatio:
-                            widget.court.widthMeters / widget.court.heightMeters,
-                        child: CourtHeatmap(
-                          court: widget.court,
-                          selection: selection,
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      HeatmapScaleLegend(selection: selection),
-                      const SizedBox(height: 16),
-                      _HeatmapFigures(selection: selection),
-                      const SizedBox(height: 12),
-                      Text(
-                        'Each square is '
-                        '${selection.grid.cellWidthMeters.toStringAsFixed(1)} × '
-                        '${selection.grid.cellHeightMeters.toStringAsFixed(1)} m '
-                        'and holds the time spent standing in it, smoothed '
-                        'across neighbouring squares so a run reads as a path '
-                        'rather than as a row of blocks. Time is credited '
-                        'between one fix and the next, and a gap longer than '
-                        '${OccupancyGrid.maxAttributableGap.inSeconds}s is '
-                        'treated as a dropout rather than as standing still.',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
+                  child: HeatmapDetail(court: court, selections: selections),
                 ),
               ),
             ],
