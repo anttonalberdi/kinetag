@@ -20,7 +20,8 @@ Widget harness({
           child: CourtCanvas(
             court: court,
             paddingPixels: padding,
-            onWorldTapDown: onTap,
+            onWorldTapDown:
+                onTap == null ? null : (world, _) => onTap(world),
             layers: [
               const CourtSurroundLayer(),
               HandballCourtLayer(court: court),
