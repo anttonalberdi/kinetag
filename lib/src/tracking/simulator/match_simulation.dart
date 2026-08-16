@@ -18,17 +18,21 @@ import 'simulated_squad.dart';
 ///
 /// Each player steers toward a target that is expressed as an **offset from a
 /// moving anchor**, not as an absolute point. Outfield anchors blend between
-/// an evenly spaced line around the side's own 6 m area and a perimeter around
-/// the opposite 9 m line. Six-player attacks move one slot inside as a pivot.
+/// an evenly spaced line around the side's own 6 m area and a neutral perimeter
+/// 10 m from the opposite goal. Six-player attacks move one slot inside as a
+/// pivot.
 /// A side holds that settled shape for [possessionDuration], then changes ends;
 /// wingers complete that transition sooner than the backs and playmaker. The
 /// offset is resampled every few seconds around the anchor. Because it rides
 /// on the anchor, the whole formation moves smoothly rather than snapping when
 /// a new target is drawn.
 ///
-/// During a settled attack, perimeter players may exchange destinations. The
-/// number is sampled around [crossesPerAttack], so the default 0.5 is genuinely
-/// about one crossing every two attacks rather than a rigid alternation.
+/// During a settled attack the ball circulates around the 10 m perimeter. Its
+/// carrier presses into a gap between two defenders, then recovers before the
+/// next carrier repeats the movement. Perimeter players may also exchange
+/// destinations. The number is sampled around [crossesPerAttack], so the
+/// default 0.5 is genuinely about one crossing every two attacks rather than a
+/// rigid alternation.
 ///
 /// Steering is acceleration-limited: velocity moves toward the desired
 /// velocity by at most [_maxAccelerationMps2] × dt per step. This is what
@@ -152,6 +156,26 @@ class MatchSimulation {
   /// Default crossing recurrence: about one move every two attacks.
   static const double defaultCrossesPerAttack = 0.5;
 
+  /// How close to goal a perimeter carrier aims while attacking a gap.
+  ///
+  /// Defenders stand at 7 m, so this puts the attacker into the seam without
+  /// asking them to run through the defensive line or into the goal area.
+  static const double attackPressDistanceMeters = 7.5;
+
+  /// Timing of the repeating receive, penetrate, and recover action.
+  static const double _firstPenetrationSeconds = 1.0;
+  static const double _penetrationIntervalSeconds = 2.65;
+  static const double _penetrationInSeconds = 0.8;
+  static const double _penetrationHoldUntilSeconds = 1.05;
+  static const double _penetrationDurationSeconds = 2.35;
+
+  /// Separation retained by the two defenders when they close an attacked
+  /// seam. They narrow the lane without collapsing into the same position.
+  static const double defensiveClosingSeparationMeters = 1.8;
+
+  /// How far each closing defender steps from their arc toward the carrier.
+  static const double _defensiveApproachFraction = 0.7;
+
   /// How often a side substitutes when nothing says otherwise.
   ///
   /// A minute is roughly what a training game does with a short bench, and it
@@ -183,12 +207,15 @@ class MatchSimulation {
   final List<_Body> _bodies = [];
   final Map<TeamSide, double> _secondsToNextSubstitution = {};
   final List<double> _scheduledCrossSeconds = [];
+  final List<_PenetrationRun> _penetrationRuns = [];
 
   int _elapsedMicros = 0;
   int _substitutionCount = 0;
   int _crossCount = 0;
   int _attackOrdinal = 0;
   int _nextCrossIndex = 0;
+  _Body? _ballCarrier;
+  (double, double)? _ballPosition;
 
   MatchSimulation({
     required this.court,
@@ -244,6 +271,17 @@ class MatchSimulation {
 
   /// Attacking lane swaps completed since the match began.
   int get crossCount => _crossCount;
+
+  /// Current ball position in court metres.
+  ///
+  /// The ball is deliberately separate from [PositionFrame]: those samples
+  /// represent wearable player tags, and inserting a synthetic ball tag would
+  /// corrupt player counts and team analytics. A renderer or future simulator
+  /// event stream can consume this state without changing recorded athletes.
+  (double, double)? get ballPosition => _ballPosition;
+
+  /// Tag carried by the player who currently has the simulated ball.
+  String? get ballCarrierTagId => _ballCarrier?.participant.tagId;
 
   /// Length of one complete home-attack / away-attack cycle.
   double get playPhasePeriodSeconds =>
@@ -366,6 +404,7 @@ class MatchSimulation {
         ),
       );
     }
+    _updateBallPosition();
 
     return PositionFrame(timestampMicros: timestampMicros, samples: samples);
   }
@@ -390,8 +429,8 @@ class MatchSimulation {
     final localPhase = isHome ? phase : -phase;
     final formation = body.formation;
 
-    late final double localX;
-    late final double localY;
+    late double localX;
+    late double localY;
     if (formation != null && !movement.keepsGoal) {
       final anchor = formation.anchorAt(
         court,
@@ -400,6 +439,14 @@ class MatchSimulation {
       );
       localX = anchor.$1;
       localY = anchor.$2;
+
+      final run = _activePenetrationFor(body);
+      if (run != null) {
+        final weight = _penetrationWeight(run);
+        final pressed = _penetrationAnchor(body);
+        localX += (pressed.$1 - localX) * weight;
+        localY += (pressed.$2 - localY) * weight;
+      }
     } else {
       final shift =
           localPhase *
@@ -410,8 +457,14 @@ class MatchSimulation {
       localY = movement.homeY * court.heightMeters;
     }
 
-    final x = isHome ? localX : court.widthMeters - localX;
-    final y = isHome ? localY : court.heightMeters - localY;
+    var x = isHome ? localX : court.widthMeters - localX;
+    var y = isHome ? localY : court.heightMeters - localY;
+
+    final reaction = _defensiveReactionFor(body);
+    if (reaction != null) {
+      x += (reaction.targetX - x) * reaction.weight;
+      y += (reaction.targetY - y) * reaction.weight;
+    }
 
     return (
       x.clamp(_courtInsetMeters, court.widthMeters - _courtInsetMeters),
@@ -498,7 +551,8 @@ class MatchSimulation {
     return 100;
   }
 
-  /// Prepares the stochastic crossing schedule for one settled attack.
+  /// Prepares ball circulation, penetration runs, and the stochastic crossing
+  /// schedule for one settled attack.
   ///
   /// A Poisson count makes [crossesPerAttack] a true recurrence: 0.5 means an
   /// average of one crossing every two possessions rather than mechanically
@@ -520,6 +574,276 @@ class MatchSimulation {
       body.attackFormation = null;
       body.takesAttackFormation = null;
     }
+
+    _preparePenetrations(_sideForAttack(ordinal), ordinal);
+  }
+
+  /// Circulates the ball through the back court and gives each receiver a
+  /// forward-and-back action. The order starts centrally, travels to one wing,
+  /// then reverses across the formation; the next possession mirrors it.
+  void _preparePenetrations(TeamSide side, int ordinal) {
+    _penetrationRuns.clear();
+
+    final perimeter =
+        _bodies
+            .where(
+              (body) =>
+                  body.participant.side == side &&
+                  body.isFielded &&
+                  body.formation != null &&
+                  !body.formation!.attacksAsPivot,
+            )
+            .toList()
+          ..sort(
+            (a, b) => a.formation!
+                .attackAnchor(court)
+                .$2
+                .compareTo(b.formation!.attackAnchor(court).$2),
+          );
+
+    if (perimeter.isEmpty) {
+      _ballCarrier = null;
+      _ballPosition = null;
+      return;
+    }
+
+    var index = (perimeter.length - 1) ~/ 2;
+    var direction = ordinal.isEven ? -1 : 1;
+    for (
+      var start = _firstPenetrationSeconds;
+      start + _penetrationDurationSeconds <= _possessionSeconds;
+      start += _penetrationIntervalSeconds
+    ) {
+      _penetrationRuns.add(
+        _PenetrationRun(runner: perimeter[index], startSeconds: start),
+      );
+
+      if (perimeter.length == 1) continue;
+      var next = index + direction;
+      if (next < 0 || next >= perimeter.length) {
+        direction = -direction;
+        next = index + direction;
+      }
+      index = next;
+    }
+
+    // The first receiver starts with the ball, allowing the opening second to
+    // settle before they drive at the defence.
+    _ballCarrier = _penetrationRuns.isEmpty
+        ? perimeter[index]
+        : _penetrationRuns.first.runner;
+    _ballPosition = (_ballCarrier!.x, _ballCarrier!.y);
+  }
+
+  _PenetrationRun? _activePenetrationFor(_Body body) {
+    if (!body.isFielded) return null;
+    final run = _activePenetration;
+    return run?.runner == body ? run : null;
+  }
+
+  _PenetrationRun? get _activePenetration {
+    if (attackingSide == null) return null;
+
+    final withinWindow =
+        _elapsedSeconds - _currentAttackOrdinal * _attackWindowSeconds;
+    for (final run in _penetrationRuns) {
+      // A substitution may remove a scheduled receiver before their run. The
+      // ball falls back to another field player; there is no seam for the
+      // defence to react to until the next scheduled receiver is available.
+      if (!run.runner.isFielded || run.runner.formation == null) continue;
+      final sinceStart = withinWindow - run.startSeconds;
+      if (sinceStart >= 0 && sinceStart < _penetrationDurationSeconds) {
+        return run;
+      }
+    }
+    return null;
+  }
+
+  /// Moves the two defenders bordering the attacked seam toward its carrier.
+  ///
+  /// Pair selection happens in world coordinates, so the same code handles
+  /// either end of the court. Their target remains split around the seam: both
+  /// step toward the attacker, but they keep enough separation to read as two
+  /// players closing a lane rather than as overlapping dots.
+  _DefensiveReaction? _defensiveReactionFor(_Body defender) {
+    final attacking = attackingSide;
+    final formation = defender.formation;
+    if (attacking == null ||
+        defender.participant.side == attacking ||
+        !defender.isFielded ||
+        defender.movement.keepsGoal ||
+        formation == null) {
+      return null;
+    }
+
+    final run = _activePenetration;
+    if (run == null) return null;
+    final localPress = _penetrationAnchor(run.runner);
+    final attackerIsHome = run.runner.participant.side == TeamSide.home;
+    final pressX = attackerIsHome
+        ? localPress.$1
+        : court.widthMeters - localPress.$1;
+    final pressY = attackerIsHome
+        ? localPress.$2
+        : court.heightMeters - localPress.$2;
+
+    final defenders =
+        _bodies
+            .where(
+              (body) =>
+                  body.participant.side == defender.participant.side &&
+                  body.isFielded &&
+                  body.formation != null &&
+                  !body.movement.keepsGoal,
+            )
+            .toList()
+          ..sort(
+            (a, b) =>
+                _defenceAnchorInWorld(a).$2
+                    .compareTo(_defenceAnchorInWorld(b).$2),
+          );
+    if (defenders.length < 2) return null;
+
+    var pairIndex = 0;
+    var nearestGapDistance = double.infinity;
+    for (var index = 0; index < defenders.length - 1; index++) {
+      final lowerY = _defenceAnchorInWorld(defenders[index]).$2;
+      final upperY = _defenceAnchorInWorld(defenders[index + 1]).$2;
+      final gapDistance = ((lowerY + upperY) / 2 - pressY).abs();
+      if (gapDistance < nearestGapDistance) {
+        nearestGapDistance = gapDistance;
+        pairIndex = index;
+      }
+    }
+
+    final lower = defenders[pairIndex];
+    final upper = defenders[pairIndex + 1];
+    if (defender != lower && defender != upper) return null;
+
+    final base = _defenceAnchorInWorld(defender);
+    final targetX = base.$1 + (pressX - base.$1) * _defensiveApproachFraction;
+    final halfSeparation = defensiveClosingSeparationMeters / 2;
+    final targetY =
+        pressY + (defender == lower ? -halfSeparation : halfSeparation);
+
+    return _DefensiveReaction(
+      targetX: targetX,
+      targetY: targetY,
+      weight: _penetrationWeight(run),
+    );
+  }
+
+  (double, double) _defenceAnchorInWorld(_Body defender) {
+    final local = defender.formation!.defenceAnchor(court);
+    return defender.participant.side == TeamSide.home
+        ? local
+        : (court.widthMeters - local.$1, court.heightMeters - local.$2);
+  }
+
+  /// Smooth target weight for a run: accelerate into the gap, spend a brief
+  /// beat engaging the line, then recover more gradually to the 10 m shape.
+  double _penetrationWeight(_PenetrationRun run) {
+    final withinWindow =
+        _elapsedSeconds - _currentAttackOrdinal * _attackWindowSeconds;
+    final sinceStart = withinWindow - run.startSeconds;
+    if (sinceStart <= 0 || sinceStart >= _penetrationDurationSeconds) return 0;
+    if (sinceStart < _penetrationInSeconds) {
+      return _smoothstep(sinceStart / _penetrationInSeconds);
+    }
+    if (sinceStart <= _penetrationHoldUntilSeconds) return 1;
+
+    final recovery =
+        (sinceStart - _penetrationHoldUntilSeconds) /
+        (_penetrationDurationSeconds - _penetrationHoldUntilSeconds);
+    return 1 - _smoothstep(recovery);
+  }
+
+  double _smoothstep(double value) {
+    final clamped = value.clamp(0.0, 1.0);
+    return clamped * clamped * (3 - 2 * clamped);
+  }
+
+  /// A stable target in the nearest space between two defenders.
+  ///
+  /// Defender slot centres are used instead of their wandering bodies so the
+  /// attacker commits to a lane rather than chasing a target that jitters from
+  /// frame to frame. Coordinates remain team-local here; away is rotated by
+  /// [_anchorFor] after the penetration has been blended in.
+  (double, double) _penetrationAnchor(_Body runner) {
+    final defendingSide = runner.participant.side == TeamSide.home
+        ? TeamSide.away
+        : TeamSide.home;
+    final defenderYs = [
+      for (final body in _bodies)
+        if (body.participant.side == defendingSide &&
+            body.isFielded &&
+            body.formation != null)
+          body.formation!.defenceAnchor(court).$2,
+    ]..sort();
+
+    final destination = runner.attackFormation ?? runner.formation!;
+    final baseY = destination.attackAnchor(court).$2;
+    final gaps = <double>[
+      for (var i = 1; i < defenderYs.length; i++)
+        (defenderYs[i - 1] + defenderYs[i]) / 2,
+    ];
+    final gapY = gaps.isEmpty
+        ? court.heightMeters / 2
+        : gaps.reduce(
+            (nearest, gap) =>
+                (gap - baseY).abs() < (nearest - baseY).abs() ? gap : nearest,
+          );
+
+    // Convert a requested distance from the goal-line segment to x. Away from
+    // the 3 m goal mouth, part of that distance is already lateral.
+    final midY = court.heightMeters / 2;
+    final lowerPostY = midY - GoalArea.goalWidthMeters / 2;
+    final upperPostY = midY + GoalArea.goalWidthMeters / 2;
+    final lateral = gapY < lowerPostY
+        ? lowerPostY - gapY
+        : gapY > upperPostY
+        ? gapY - upperPostY
+        : 0.0;
+    final forward = math.sqrt(
+      math.max(
+        0.0,
+        attackPressDistanceMeters * attackPressDistanceMeters -
+            lateral * lateral,
+      ),
+    );
+    return (court.widthMeters - forward, gapY);
+  }
+
+  /// Keeps ball possession coordinated with the scheduled penetrating player.
+  /// Passes occur at the next run's start; between attacks the last carrier
+  /// retains it through the transition instead of making the ball disappear.
+  void _updateBallPosition() {
+    final side = attackingSide;
+    if (side != null) {
+      final withinWindow =
+          _elapsedSeconds - _currentAttackOrdinal * _attackWindowSeconds;
+      for (final run in _penetrationRuns) {
+        if (run.startSeconds > withinWindow) break;
+        if (run.runner.isFielded) _ballCarrier = run.runner;
+      }
+    }
+
+    final carrier = _ballCarrier;
+    if (carrier != null && carrier.isFielded) {
+      _ballPosition = (carrier.x, carrier.y);
+      return;
+    }
+
+    _ballCarrier = null;
+    for (final body in _bodies) {
+      if (!body.isFielded || body.movement.keepsGoal) continue;
+      if (side != null && body.participant.side != side) continue;
+      _ballCarrier = body;
+      break;
+    }
+    _ballPosition = _ballCarrier == null
+        ? null
+        : (_ballCarrier!.x, _ballCarrier!.y);
   }
 
   int _samplePoisson(double mean) {
@@ -956,4 +1280,25 @@ class _Body {
   /// Whether this player is currently playing rather than seated or walking
   /// off.
   bool get isFielded => benchSeat == null;
+}
+
+/// One ball-led attack on a defensive seam during a settled possession.
+class _PenetrationRun {
+  final _Body runner;
+  final double startSeconds;
+
+  const _PenetrationRun({required this.runner, required this.startSeconds});
+}
+
+/// Temporary target for one of the two defenders closing an attacked seam.
+class _DefensiveReaction {
+  final double targetX;
+  final double targetY;
+  final double weight;
+
+  const _DefensiveReaction({
+    required this.targetX,
+    required this.targetY,
+    required this.weight,
+  });
 }

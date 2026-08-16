@@ -82,8 +82,9 @@ abstract final class HandballFormation {
   /// Defensive line: close to, but not standing on, the 6 m boundary.
   static const double defenceDistanceMeters = 7.0;
 
-  /// Back-court attacking line, centred on the dashed 9 m boundary.
-  static const double attackDistanceMeters = 9.1;
+  /// Neutral back-court attacking line, one metre outside the dashed 9 m
+  /// boundary. Players attack forward from here and recover to it afterwards.
+  static const double attackDistanceMeters = 10.0;
 
   /// The pivot stays just outside the goal area among the defenders.
   static const double pivotDistanceMeters = 7.0;

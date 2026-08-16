@@ -82,6 +82,11 @@ class SimulatorTrackingSource implements TrackingSource {
   /// Simulated time produced since the current connection began.
   Duration get elapsed => _simulation?.elapsed ?? Duration.zero;
 
+  /// Live ball state for simulator-aware renderers. It is intentionally not a
+  /// player sample, so recordings and team analytics keep their real tag set.
+  (double, double)? get ballPosition => _simulation?.ballPosition;
+  String? get ballCarrierTagId => _simulation?.ballCarrierTagId;
+
   @override
   Future<void> connect() async {
     if (_disposed) {

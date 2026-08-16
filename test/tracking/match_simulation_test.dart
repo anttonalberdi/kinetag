@@ -302,6 +302,153 @@ void main() {
       expect(fixed.crossCount, 0);
       expect(crossing.crossCount, greaterThan(0));
     });
+
+    for (final fieldPlayerCount in [4, 5, 6]) {
+      test('$fieldPlayerCount-player attack circulates the ball through '
+          'penetration and recovery runs', () {
+        final squad = _squadWithFieldPlayers(fieldPlayerCount);
+        final simulation = MatchSimulation(
+          court: court,
+          squad: squad,
+          seed: 79 + fieldPlayerCount,
+          crossesPerAttack: 0,
+          substitutionInterval: Duration.zero,
+        );
+        final perimeter = squad
+            .forSide(TeamSide.home)
+            .where(
+              (participant) =>
+                  participant.isOnCourt &&
+                  participant.role != PlayerRole.goalkeeper &&
+                  !(fieldPlayerCount == 6 &&
+                      participant.role == PlayerRole.pivot),
+            )
+            .toList();
+        final distances = {
+          for (final participant in perimeter) participant.tagId: <double>[],
+        };
+        final carriers = <String>{};
+
+        for (var step = 1; step <= 400; step++) {
+          final frame = simulation.advance(
+            dtMicros: _twentyHzMicros,
+            timestampMicros: step * _twentyHzMicros,
+          );
+          if (simulation.attackingSide != TeamSide.home) continue;
+
+          final carrierId = simulation.ballCarrierTagId;
+          final ball = simulation.ballPosition;
+          expect(carrierId, isNotNull);
+          expect(ball, isNotNull);
+          carriers.add(carrierId!);
+          final carrier = frame.sampleForTag(carrierId)!;
+          expect(ball!.$1, closeTo(carrier.x, 1e-9));
+          expect(ball.$2, closeTo(carrier.y, 1e-9));
+
+          for (final participant in perimeter) {
+            final sample = frame.sampleForTag(participant.tagId)!;
+            distances[participant.tagId]!.add(
+              _distanceToGoalLine(court, sample, attacksRight: true),
+            );
+          }
+        }
+
+        expect(carriers, {
+          for (final participant in perimeter) participant.tagId,
+        }, reason: 'possession should reach every perimeter player');
+        final allDistances = distances.values.expand((track) => track).toList();
+        expect(
+          _mean(allDistances),
+          inInclusiveRange(9.0, 10.2),
+          reason: 'the settled shape should average roughly 10 m from goal',
+        );
+
+        for (final entry in distances.entries) {
+          final track = entry.value;
+          final closest = track.reduce(math.min);
+          final closestAt = track.indexOf(closest);
+          final recovered = track.skip(closestAt + 1).reduce(math.max);
+          expect(
+            closest,
+            lessThan(9.4),
+            reason: '${entry.key} never pressed the defensive line',
+          );
+          expect(
+            recovered - closest,
+            greaterThan(0.5),
+            reason: '${entry.key} did not recover after penetrating',
+          );
+        }
+      });
+
+      test(
+        '$fieldPlayerCount-player defence closes the attacked seam and resets',
+        () {
+          final squad = _squadWithFieldPlayers(fieldPlayerCount);
+          final simulation = MatchSimulation(
+            court: court,
+            squad: squad,
+            seed: 101 + fieldPlayerCount,
+            crossesPerAttack: 0,
+            substitutionInterval: Duration.zero,
+          );
+          final defenderIds = squad
+              .forSide(TeamSide.away)
+              .where(
+                (participant) =>
+                    participant.isOnCourt &&
+                    participant.role != PlayerRole.goalkeeper,
+              )
+              .map((participant) => participant.tagId)
+              .toList();
+
+          // The first penetration starts at 1 s, reaches the line around 2 s,
+          // and has recovered before the next carrier starts at 3.65 s.
+          final before = run(simulation, 0.95).last;
+          final closing = run(simulation, 1.0).last;
+          final recovered = run(simulation, 1.65).last;
+          defenderIds.sort(
+            (a, b) =>
+                before.sampleForTag(a)!.y.compareTo(before.sampleForTag(b)!.y),
+          );
+
+          var closingPair = 0;
+          var largestClosure = double.negativeInfinity;
+          for (var index = 0; index < defenderIds.length - 1; index++) {
+            final lower = defenderIds[index];
+            final upper = defenderIds[index + 1];
+            final defaultGap =
+                before.sampleForTag(upper)!.y - before.sampleForTag(lower)!.y;
+            final closedGap =
+                closing.sampleForTag(upper)!.y - closing.sampleForTag(lower)!.y;
+            final closure = defaultGap - closedGap;
+            if (closure > largestClosure) {
+              largestClosure = closure;
+              closingPair = index;
+            }
+          }
+
+          final lower = defenderIds[closingPair];
+          final upper = defenderIds[closingPair + 1];
+          final closedGap =
+              closing.sampleForTag(upper)!.y - closing.sampleForTag(lower)!.y;
+          final resetGap =
+              recovered.sampleForTag(upper)!.y -
+              recovered.sampleForTag(lower)!.y;
+
+          expect(
+            largestClosure,
+            greaterThan(0.2),
+            reason: 'the neighbouring defenders did not close the seam',
+          );
+          expect(
+            resetGap - closedGap,
+            greaterThan(0.15),
+            reason: 'the closing pair did not return to its defensive shape',
+          );
+        },
+      );
+    }
   });
 
   group('the goal areas', () {
@@ -770,3 +917,40 @@ void main() {
 
 (double, double) _velocity(PositionSample a, PositionSample b, double dt) =>
     ((b.x - a.x) / dt, (b.y - a.y) / dt);
+
+SimulatedSquad _squadWithFieldPlayers(int count) {
+  if (count < 6) {
+    return SimulatedSquad.handballTeams(fieldPlayersOnCourt: count);
+  }
+
+  var tag = 0;
+  return SimulatedSquad([
+    for (final side in TeamSide.values)
+      for (final role in PlayerRole.values)
+        SimulatedParticipant(side: side, role: role, tagId: 'six-${++tag}'),
+  ]);
+}
+
+double _distanceToGoalLine(
+  Court court,
+  PositionSample sample, {
+  required bool attacksRight,
+}) {
+  final goalX = attacksRight ? court.widthMeters : 0.0;
+  final midY = court.heightMeters / 2;
+  final halfGoal = GoalArea.goalWidthMeters / 2;
+  final closestY = sample.y.clamp(midY - halfGoal, midY + halfGoal);
+  final dx = sample.x - goalX;
+  final dy = sample.y - closestY;
+  return math.sqrt(dx * dx + dy * dy);
+}
+
+double _mean(Iterable<double> values) {
+  var sum = 0.0;
+  var count = 0;
+  for (final value in values) {
+    sum += value;
+    count++;
+  }
+  return sum / count;
+}

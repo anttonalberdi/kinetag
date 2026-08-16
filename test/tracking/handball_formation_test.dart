@@ -33,11 +33,12 @@ void main() {
     }
 
     for (final count in [4, 5]) {
-      test('$count attackers are all spaced around the 9 m line', () {
+      test('$count attackers recover to a spaced 10 m line', () {
         final slots = HandballFormation.slots(count);
         final positions = [for (final slot in slots) slot.attackAnchor(court)];
 
         expect(slots.where((slot) => slot.attacksAsPivot), isEmpty);
+        expect(HandballFormation.attackDistanceMeters, 10.0);
         for (final position in positions) {
           expect(
             _distanceToGoalLine(court, position, attacksRight: true),
