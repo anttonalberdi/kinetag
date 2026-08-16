@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../features/home/home_screen.dart';
+import '../features/live/live_screen.dart';
 import '../features/setup/setup_screen.dart';
 
 /// Top-level destinations, in workflow order: Setup -> Record -> Replay.
@@ -43,11 +44,7 @@ class _AppShellState extends State<AppShell> {
   Widget _screenFor(AppDestination destination) => switch (destination) {
         AppDestination.home => HomeScreen(onNavigate: _select),
         AppDestination.setup => const SetupScreen(),
-        AppDestination.live => const _PlaceholderScreen(
-            title: 'Live',
-            message: 'Live tracking arrives with the simulator milestone.',
-            icon: Icons.sensors,
-          ),
+        AppDestination.live => const LiveScreen(),
         AppDestination.sessions => const _PlaceholderScreen(
             title: 'Sessions',
             message: 'Recorded sessions will be listed here.',
